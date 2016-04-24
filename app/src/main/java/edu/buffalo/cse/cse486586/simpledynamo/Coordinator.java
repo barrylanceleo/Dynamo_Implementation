@@ -1,6 +1,7 @@
 package edu.buffalo.cse.cse486586.simpledynamo;
 
 
+import android.content.ContentValues;
 import android.content.Context;
 import android.telephony.TelephonyManager;
 import android.util.Log;
@@ -12,8 +13,10 @@ import java.util.Collections;
 import java.util.Formatter;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
 
 public class Coordinator {
 
@@ -23,11 +26,12 @@ public class Coordinator {
     final String MY_HASH;
     final int [] NODE_IDS = {5554, 5556, 5558, 5560, 5562};
     final List<Node> NODE_LIST;
+    final Map<Integer, Node> NODE_MAP;
     final List<Node> PREFERENCE_LIST;
 
     private Context mContext;
 
-    HashMap<Integer, Object> messageMap;
+    Map<Integer, Object> messageMap;
 
     // Coordinator is singleton
     private static Coordinator instance;
@@ -38,7 +42,7 @@ public class Coordinator {
     BlockingQueue<String> receivedMessageQueue;
 
     // constants for Amazon Dynamo
-    private static class Dynamo {
+    private static class DynamoContract {
         static final int N = 3;     // number of replicas
         static final int R = 2;     // number of reader
         static final int W = 2;     // number of writers
@@ -95,9 +99,9 @@ public class Coordinator {
         mSender = new Sender();
 
         // messageMap to keep track of all the messages sent
-        messageMap = new HashMap<Integer, Object>();
+        messageMap = Collections.synchronizedMap(new HashMap<Integer, Object>());
 
-        // initialize the other Nodes list
+        // initialize the Nodes list, in ascending order of their hash
         NODE_LIST = new ArrayList<Node>();
         for(int i = 0; i < NODE_IDS.length; i++) {
             NODE_LIST.add(new Node(NODE_IDS[i]));
@@ -108,18 +112,15 @@ public class Coordinator {
             Log.i(LOG_TAG, NODE_LIST.get(i).toString());
         }
 
+        // initialize the Nodes map, used for id to node mapping
+        Map<Integer, Node>  temp = new HashMap<Integer, Node>();
+        for(Node node : NODE_LIST) {
+            temp.put(node.id, node);
+        }
+        NODE_MAP = Collections.unmodifiableMap(temp);
+
         // initialize the preference list
-        PREFERENCE_LIST = new ArrayList<Node>();
-        int i;
-        for(i = 0; i < NODE_LIST.size(); i++) {
-            if(NODE_LIST.get(i).hash.equals(MY_HASH))
-                break;
-        }
-        if(i == NODE_LIST.size())
-            throw new RuntimeException("FATAL ERROR: My Node id not in node list.");
-        for(int j = i; j < i+Dynamo.N; j++) {
-            PREFERENCE_LIST.add(NODE_LIST.get(j%NODE_LIST.size()));
-        }
+        PREFERENCE_LIST = getPreferenceList(Integer.toString(MY_ID));
         Log.i(LOG_TAG, "PREFERENCE_LIST:");
         for(int j = 0; j < PREFERENCE_LIST.size(); j++) {
             Log.i(LOG_TAG, PREFERENCE_LIST.get(j).toString());
@@ -150,9 +151,8 @@ public class Coordinator {
         while(true){
             try {
                 String message = receivedMessageQueue.take();
-                Message messageObject = Utility.buildMessageObjectFromJson(message);
-                Log.v(LOG_TAG, "Handling message: " +messageObject);
-//                handleMessage(messageObject);
+                // TODO handle message should go to a new thread
+                handleMessage(message);
             } catch (InterruptedException e) {
                 Log.e(LOG_TAG, "Exception: Message Consumer was interrupted.", e);
             }
@@ -185,7 +185,110 @@ public class Coordinator {
         return NODE_LIST.get(0);
     }
 
-    void handleMessage(Message handledMessage) {
+    boolean amITheCoordinator(String key) {
+        Node coordinatingNode = findCoordinatingNode(key);
+        return coordinatingNode.id == MY_ID? true : false;
+    }
+
+    List<Node> getPreferenceList(String key) {
+        List<Node> preferenceList = new ArrayList<Node>();
+        Node coordinatingNode = findCoordinatingNode(key);
+        int i;
+        for(i = 0; i < NODE_LIST.size(); i++) {
+            if(NODE_LIST.get(i).equals(coordinatingNode))
+                break;
+        }
+        if(i == NODE_LIST.size())
+            throw new RuntimeException("FATAL ERROR: Node not present in NodeList. " +
+                                            "This shouldn't happen.");
+        for(int j = i; j < i+ DynamoContract.N; j++) {
+            preferenceList.add(NODE_LIST.get(j%NODE_LIST.size()));
+        }
+        return preferenceList;
+    }
+
+    void handleMessage(String message) {
+        // this is a new message object
+        Message handledMessage = Utility.buildMessageObjectFromJson(message);
+        Log.v(LOG_TAG, "Handling message: " +handledMessage);
+        switch (handledMessage.type) {
+            case MessageContract.Type.MSG_INSERT_INITIATE_REQUEST: {
+                // send insert insert commands to the preference list
+                List<Node> preferenceList = getPreferenceList(handledMessage.content.key);
+                Message insertMessage = new Message(handledMessage);
+                insertMessage.type = MessageContract.Type.MSG_INSERT_REQUEST;
+                insertMessage.id = MessageContract.messageCounter++;
+                insertMessage.coordinatorId = MY_ID;
+                for (Node node : preferenceList) {
+                    mSender.sendMessage(Utility.convertMessageToJSON(insertMessage),
+                            node.port);
+                }
+
+                // create a blocking queue to keep track of the responses
+                LinkedBlockingQueue<Message> responseQueue = new LinkedBlockingQueue<Message>();
+                messageMap.put(insertMessage.id, responseQueue);
+
+                // poll till we receive all responses or timeout
+                List<Message> responses = new ArrayList<Message>();
+                for (int i = 0; i < DynamoContract.W; i++) {
+                    try {
+                        responses.add(responseQueue.poll(
+                                MessageContract.RESPONSE_TIMEOUT, TimeUnit.MILLISECONDS));
+                    } catch (InterruptedException e) {
+                        Log.e(LOG_TAG, "INSERT: Interrupted " +
+                                "while waiting for response to: " + insertMessage, e);
+                    }
+                }
+                // remove the message from the messageMap
+                messageMap.remove(insertMessage.id);
+
+                // check if we received enough responses and send a response to the source
+                if (responses.size() < DynamoContract.W) {
+                    Log.e(LOG_TAG, "INSERT: Received only  " + responses.size() + "responses" +
+                            " for message: " + insertMessage);
+                } else {
+                    handledMessage.type = MessageContract.Type.MSG_INSERT_INITIATE_RESPONSE;
+                    handledMessage.coordinatorId = MY_ID;
+                    mSender.sendMessage(Utility.convertMessageToJSON(handledMessage),
+                            NODE_MAP.get(handledMessage.sourceId).port);
+                }
+            }
+            break;
+            case MessageContract.Type.MSG_INSERT_INITIATE_RESPONSE: {
+                // notify that we have received the response
+                Message sentMessage = (Message) messageMap.get(handledMessage.id);
+                synchronized (sentMessage) {
+                    notify();
+                }
+            }
+            break;
+            case MessageContract.Type.MSG_INSERT_REQUEST: {
+                // insert into my content provider
+                ContentValues cv = new ContentValues();
+                cv.put(DatabaseContract.DynamoEntry.COLUMN_KEY, handledMessage.getKey());
+                cv.put(DatabaseContract.DynamoEntry.COLUMN_VALUE, handledMessage.getValue());
+                cv.put(DatabaseContract.DynamoEntry.COLUMN_CONTEXT, handledMessage.getContext());
+                mContext.getContentResolver().insert(DatabaseContract.DynamoEntry.NODE_URI, cv);
+
+                // send a response to the coordinator
+                handledMessage.type = MessageContract.Type.MSG_INSERT_RESPONSE;
+            }
+            break;
+            case MessageContract.Type.MSG_INSERT_RESPONSE: {
+                // add the response to the response queue
+                LinkedBlockingQueue responseQueue = (LinkedBlockingQueue<Message>)
+                        messageMap.get(handledMessage.id);
+                try {
+                    responseQueue.put(handledMessage);
+                } catch (InterruptedException e) {
+                    Log.e(LOG_TAG, "INSERT: Interrupted " +
+                            "while adding response to queue." + handledMessage, e);
+                }
+            }
+            break;
+            default:
+            Log.e(LOG_TAG, "Unknown message type.");
+        }
 
     }
 }
