@@ -7,8 +7,7 @@ public class Message {
     int id;
     int sourceId;
     int coordinatorId;
-    Content content;
-    int responseFlag;
+    String content;
 
     Message(int type, int id, int sourceId) {
         this.type = type;
@@ -21,8 +20,7 @@ public class Message {
         this.id  = another.id;
         this.sourceId  = another.sourceId;
         this.coordinatorId  = another.coordinatorId;
-        this.content  = this.new Content(another.content);
-        this.responseFlag  = another.responseFlag;
+        this.content  = another.content;
     }
 
     @Override
@@ -31,52 +29,7 @@ public class Message {
                 MessageContract.Field.MSG_FIELD_ID +": " + id + "\n" +
                 MessageContract.Field.MSG_FIELD_SOURCE_ID +": " + sourceId + "\n" +
                 MessageContract.Field.MSG_FIELD_COORDINATOR_ID +": " + coordinatorId + "\n" +
-                MessageContract.Field.MSG_FIELD_CONTENT +": " + content + "\n" +
-                MessageContract.Field.MSG_FIELD_RESPONSE_FLAG +": " + responseFlag;
-    }
-
-    String getKey() {
-        return content.key;
-    }
-    String getValue() {
-        return content.value;
-    }
-    String getContext() {
-        return content.context;
-    }
-
-    void setKey(String key) {
-        content.key = key;
-    }
-    void setValue(String value) {
-        content.value = value;
-    }
-    void setContext(String context) {
-        content.context = context;
-    }
-
-    class Content {
-        String key;
-        String value;
-        String context;
-
-        Content(String key, String value, String context) {
-            this.key = key;
-            this.value = value;
-            this.context = context;
-        }
-
-        Content(Content another) {
-            this.key = another.key;
-            this.value = another.value;
-            this.context = another.context;
-        }
-
-        @Override
-        public String toString() {
-            return MessageContract.Field.MSG_CONTENT_KEY + ": " + key + "\n" +
-                    MessageContract.Field.MSG_CONTENT_VALUE + ": " + value + "\n" +
-                    MessageContract.Field.MSG_CONTENT_CONTEXT + ": " + context;
-        }
+                MessageContract.Field.MSG_FIELD_CONTENT +": " + content;
     }
 }
+

@@ -3,9 +3,17 @@ package edu.buffalo.cse.cse486586.simpledynamo;
 
 import android.content.ContentValues;
 import android.content.Context;
+import android.database.Cursor;
 import android.telephony.TelephonyManager;
+import android.util.JsonWriter;
 import android.util.Log;
 
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
+
+import java.io.IOException;
+import java.io.StringWriter;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
@@ -60,7 +68,7 @@ public class Coordinator {
 
         @Override
         public boolean equals(Object o) {
-            return hash.equals(((Node)o).hash);
+            return o instanceof Node && hash.equals(((Node)o).hash);
         }
 
         @Override
@@ -92,7 +100,7 @@ public class Coordinator {
 
         // start a Listener on port 10000,
         // listener adds the messages received to the receivedMessageQueue
-        receivedMessageQueue = new LinkedBlockingQueue();
+        receivedMessageQueue = new LinkedBlockingQueue<String>();
         new Listener(receivedMessageQueue);
 
         // create a sender, used to send messages in a new thread
@@ -103,13 +111,13 @@ public class Coordinator {
 
         // initialize the Nodes list, in ascending order of their hash
         NODE_LIST = new ArrayList<Node>();
-        for(int i = 0; i < NODE_IDS.length; i++) {
-            NODE_LIST.add(new Node(NODE_IDS[i]));
+        for(int node_id : NODE_IDS) {
+            NODE_LIST.add(new Node(node_id));
         }
         Collections.sort(NODE_LIST);
         Log.i(LOG_TAG, "NODE_LIST:");
-        for(int i = 0; i < NODE_LIST.size(); i++) {
-            Log.i(LOG_TAG, NODE_LIST.get(i).toString());
+        for(Node node : NODE_LIST) {
+            Log.i(LOG_TAG, node.toString());
         }
 
         // initialize the Nodes map, used for id to node mapping
@@ -213,8 +221,9 @@ public class Coordinator {
         Log.v(LOG_TAG, "Handling message: " +handledMessage);
         switch (handledMessage.type) {
             case MessageContract.Type.MSG_INSERT_INITIATE_REQUEST: {
-                // send insert insert commands to the preference list
-                List<Node> preferenceList = getPreferenceList(handledMessage.content.key);
+                String [] keyValueContext = getKeyValueContext(handledMessage.content);
+                // send insert commands to the preference list
+                List<Node> preferenceList = getPreferenceList(keyValueContext[0]);
                 Message insertMessage = new Message(handledMessage);
                 insertMessage.type = MessageContract.Type.MSG_INSERT_REQUEST;
                 insertMessage.id = MessageContract.messageCounter++;
@@ -257,21 +266,27 @@ public class Coordinator {
             case MessageContract.Type.MSG_INSERT_INITIATE_RESPONSE: {
                 // notify that we have received the response
                 Message sentMessage = (Message) messageMap.get(handledMessage.id);
-                synchronized (sentMessage) {
-                    notify();
+                if(sentMessage != null) {
+                    messageMap.put(handledMessage.id, handledMessage);
+                    synchronized (sentMessage) {
+                        notify();
+                    }
                 }
             }
             break;
             case MessageContract.Type.MSG_INSERT_REQUEST: {
+                String [] keyValueContext = getKeyValueContext(handledMessage.content);
                 // insert into my content provider
                 ContentValues cv = new ContentValues();
-                cv.put(DatabaseContract.DynamoEntry.COLUMN_KEY, handledMessage.getKey());
-                cv.put(DatabaseContract.DynamoEntry.COLUMN_VALUE, handledMessage.getValue());
-                cv.put(DatabaseContract.DynamoEntry.COLUMN_CONTEXT, handledMessage.getContext());
+                cv.put(DatabaseContract.DynamoEntry.COLUMN_KEY, keyValueContext[0]);
+                cv.put(DatabaseContract.DynamoEntry.COLUMN_VALUE, keyValueContext[1]);
+                cv.put(DatabaseContract.DynamoEntry.COLUMN_CONTEXT, keyValueContext[2]);
                 mContext.getContentResolver().insert(DatabaseContract.DynamoEntry.NODE_URI, cv);
 
                 // send a response to the coordinator
                 handledMessage.type = MessageContract.Type.MSG_INSERT_RESPONSE;
+                mSender.sendMessage(Utility.convertMessageToJSON(handledMessage),
+                        handledMessage.coordinatorId);
             }
             break;
             case MessageContract.Type.MSG_INSERT_RESPONSE: {
@@ -279,7 +294,139 @@ public class Coordinator {
                 LinkedBlockingQueue responseQueue = (LinkedBlockingQueue<Message>)
                         messageMap.get(handledMessage.id);
                 try {
-                    responseQueue.put(handledMessage);
+                    if(responseQueue != null) {
+                        responseQueue.put(handledMessage);
+                    }
+                } catch (InterruptedException e) {
+                    Log.e(LOG_TAG, "INSERT: Interrupted " +
+                            "while adding response to queue." + handledMessage, e);
+                }
+            }
+            break;
+            case MessageContract.Type.MSG_QUERY_INITIATE_REQUEST: {
+                String key = handledMessage.content;
+                if(key.equals("*")) {
+                    // send "@" queries to all nodes
+                    Message queryMessage = new Message(handledMessage);
+                    queryMessage.type = MessageContract.Type.MSG_QUERY_REQUEST;
+                    queryMessage.id = MessageContract.messageCounter++;
+                    queryMessage.coordinatorId = MY_ID;
+                    for (Node node : NODE_LIST) {
+                        mSender.sendMessage(Utility.convertMessageToJSON(queryMessage),
+                                node.port);
+                    }
+
+                    // create a blocking queue to keep track of the responses
+                    LinkedBlockingQueue<Message> responseQueue = new LinkedBlockingQueue<Message>();
+                    messageMap.put(queryMessage.id, responseQueue);
+
+                    // poll till we receive all responses
+                    List<Message> responses = new ArrayList<Message>();
+                    for (int i = 0; i < NODE_LIST.size(); i++) {
+                        try {
+                            responses.add(responseQueue.poll(
+                                    MessageContract.RESPONSE_TIMEOUT, TimeUnit.MILLISECONDS));
+                        } catch (InterruptedException e) {
+                            Log.e(LOG_TAG, "INSERT: Interrupted " +
+                                    "while waiting for response to: " + queryMessage, e);
+                        }
+                    }
+                    // remove the message from the messageMap
+                    messageMap.remove(queryMessage.id);
+
+                    // reconcile the responses and send a response to the source
+                    handledMessage.type = MessageContract.Type.MSG_QUERY_INITIATE_RESPONSE;
+                    handledMessage.coordinatorId = MY_ID;
+                    handledMessage.content = reconcileResponses(responses);
+                    mSender.sendMessage(Utility.convertMessageToJSON(handledMessage),
+                            NODE_MAP.get(handledMessage.sourceId).port);
+                }
+                else {
+                    // send query to the preference list
+                    List<Node> preferenceList = getPreferenceList(key);
+                    Message queryMessage = new Message(handledMessage);
+                    queryMessage.type = MessageContract.Type.MSG_QUERY_REQUEST;
+                    queryMessage.id = MessageContract.messageCounter++;
+                    queryMessage.coordinatorId = MY_ID;
+                    for (Node node : preferenceList) {
+                        mSender.sendMessage(Utility.convertMessageToJSON(queryMessage),
+                                node.port);
+                    }
+
+                    // create a blocking queue to keep track of the responses
+                    LinkedBlockingQueue<Message> responseQueue = new LinkedBlockingQueue<Message>();
+                    messageMap.put(queryMessage.id, responseQueue);
+
+                    // poll till we receive all responses or timeout
+                    List<Message> responses = new ArrayList<Message>();
+                    for (int i = 0; i < DynamoContract.R; i++) {
+                        try {
+                            responses.add(responseQueue.poll(
+                                    MessageContract.RESPONSE_TIMEOUT, TimeUnit.MILLISECONDS));
+                        } catch (InterruptedException e) {
+                            Log.e(LOG_TAG, "INSERT: Interrupted " +
+                                    "while waiting for response to: " + queryMessage, e);
+                        }
+                    }
+                    // remove the message from the messageMap
+                    messageMap.remove(queryMessage.id);
+
+                    // check if we received enough responses and send a response to the source
+                    if (responses.size() < DynamoContract.R) {
+                        Log.e(LOG_TAG, "INSERT: Received only  " + responses.size() + "responses" +
+                                " for message: " + queryMessage);
+                    } else {
+                        handledMessage.type = MessageContract.Type.MSG_QUERY_INITIATE_RESPONSE;
+                        handledMessage.coordinatorId = MY_ID;
+                        handledMessage.content = reconcileResponses(responses);
+                        mSender.sendMessage(Utility.convertMessageToJSON(handledMessage),
+                                NODE_MAP.get(handledMessage.sourceId).port);
+                    }
+                }
+            }
+            break;
+            case MessageContract.Type.MSG_QUERY_INITIATE_RESPONSE: {
+                // notify that we have received the response
+                Message sentMessage = (Message) messageMap.get(handledMessage.id);
+                if(sentMessage != null) {
+                    messageMap.put(handledMessage.id, handledMessage);
+                    synchronized (sentMessage) {
+                        notify();
+                    }
+                }
+            }
+            break;
+            case MessageContract.Type.MSG_QUERY_REQUEST: {
+                // setup the query parameters
+                String selection;
+                String [] selectionArgs;
+                if(handledMessage.content.equals("*"))
+                {
+                    selection = null;
+                    selectionArgs = null;
+                }
+                else {
+                    selection = "key=?";
+                    selectionArgs = new String[] {handledMessage.content};
+                }
+                // query my content provider
+                Cursor result = mContext.getContentResolver().query(DatabaseContract.DynamoEntry.NODE_URI,
+                        null, selection, selectionArgs, null);
+                // send a response to the coordinator
+                handledMessage.type = MessageContract.Type.MSG_QUERY_RESPONSE;
+                handledMessage.content = Utility.convertCursorToString(result);
+                mSender.sendMessage(Utility.convertMessageToJSON(handledMessage),
+                        handledMessage.coordinatorId);
+            }
+            break;
+            case MessageContract.Type.MSG_QUERY_RESPONSE: {
+                // add the response to the response queue
+                LinkedBlockingQueue responseQueue = (LinkedBlockingQueue<Message>)
+                        messageMap.get(handledMessage.id);
+                try {
+                    if(responseQueue != null) {
+                        responseQueue.put(handledMessage);
+                    }
                 } catch (InterruptedException e) {
                     Log.e(LOG_TAG, "INSERT: Interrupted " +
                             "while adding response to queue." + handledMessage, e);
@@ -289,6 +436,68 @@ public class Coordinator {
             default:
             Log.e(LOG_TAG, "Unknown message type.");
         }
+    }
+    String [] getKeyValueContext(String text) {
+        String [] keyValueContext = new String[3];
+        try {
+            JSONObject JSONText = new JSONObject(text);
+            keyValueContext[0] = JSONText.getString(MessageContract.Field.MSG_CONTENT_KEY);
+            keyValueContext[1] = JSONText.getString(MessageContract.Field.MSG_CONTENT_VALUE);
+            keyValueContext[2] = JSONText.getString(MessageContract.Field.MSG_CONTENT_CONTEXT);
+        }
+        catch (JSONException e) {
+            Log.e(LOG_TAG, "Improper JSON format in getKeyValueContext()");
+        }
+        return keyValueContext;
+    }
 
+    String reconcileResponses(List<Message> responses) {
+        HashMap<String, JSONObject> keyMap = new HashMap<String, JSONObject>();
+        for(Message response : responses) {
+            try {
+                JSONArray messageJSON = new JSONArray(response.content);
+                for(int i = 0; i < messageJSON.length(); i++){
+                    JSONObject currentObject = messageJSON.getJSONObject(i);
+                    String currentKey = currentObject.getString(MessageContract.Field.MSG_CONTENT_KEY);
+                    String currentValue = currentObject.getString(MessageContract.Field.MSG_CONTENT_VALUE);
+                    int currentVersion = Integer.parseInt(currentObject.getString(
+                            MessageContract.Field.MSG_CONTENT_CONTEXT));
+                    JSONObject inMapObject = keyMap.get(currentKey);
+                    if(inMapObject == null ||
+                            Integer.parseInt(inMapObject.getString(
+                                    MessageContract.Field.MSG_CONTENT_CONTEXT)) < currentVersion) {
+                        keyMap.put(currentKey, currentObject);
+                    }
+                }
+            } catch (JSONException e) {
+                Log.e(LOG_TAG, "Exception: Improper Message Format.", e);
+            }
+        }
+
+        // put the values in the keyMap to a JSONArray
+        StringWriter sWriter = new StringWriter();
+        JsonWriter jWriter = new JsonWriter(sWriter);
+        try {
+            jWriter.beginArray();
+            for(Map.Entry<String, JSONObject> entry : keyMap.entrySet())
+            {
+                JSONObject currentObject = entry.getValue();
+                String currentKey = currentObject.getString(MessageContract.Field.MSG_CONTENT_KEY);
+                String currentValue = currentObject.getString(MessageContract.Field.MSG_CONTENT_VALUE);
+                String currentVersion = currentObject.getString(MessageContract.Field.MSG_CONTENT_CONTEXT);
+                jWriter.beginObject();
+                jWriter.name(MessageContract.Field.MSG_CONTENT_KEY).value(currentKey);
+                jWriter.name(MessageContract.Field.MSG_CONTENT_VALUE).value(currentValue);
+                jWriter.name(MessageContract.Field.MSG_CONTENT_CONTEXT).value(currentVersion);
+                jWriter.endObject();
+            }
+            jWriter.endArray();
+            jWriter.close();
+        } catch (IOException e) {
+            Log.e(LOG_TAG, "Exception: IO Exception in JsonWriter.", e);
+        } catch (JSONException e) {
+            Log.e(LOG_TAG, "Exception: Improper Message Format.", e);
+        }
+        return sWriter.toString();
     }
 }

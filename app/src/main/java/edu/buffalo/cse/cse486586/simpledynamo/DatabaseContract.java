@@ -3,9 +3,6 @@ package edu.buffalo.cse.cse486586.simpledynamo;
 import android.content.ContentResolver;
 import android.net.Uri;
 
-/**
- * Created by barry on 4/24/16.
- */
 public class DatabaseContract {
     public static final String CONTENT_AUTHORITY = "edu.buffalo.cse.cse486586.simpledynamo.provider";
     public static final Uri BASE_CONTENT_URI = Uri.parse("content://" + CONTENT_AUTHORITY);
@@ -27,10 +24,10 @@ public class DatabaseContract {
         public static final String TABLE_NAME = "DynamoTable";
 
         //columns
-        public static final String COLUMN_MOVIE_ID = "movie_id";
         public static final String COLUMN_KEY = "key";
         public static final String COLUMN_VALUE = "value";
         public static final String COLUMN_CONTEXT = "context";
+        public static final String COLUMN_OWNER_ID = "owner_id";
     }
 
 

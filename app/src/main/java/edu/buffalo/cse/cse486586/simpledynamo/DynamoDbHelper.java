@@ -22,6 +22,7 @@ public class DynamoDbHelper extends SQLiteOpenHelper {
                 DatabaseContract.DynamoEntry.TABLE_NAME + " (" +
                 DatabaseContract.DynamoEntry.COLUMN_KEY + " TEXT PRIMARY KEY, " +
                 DatabaseContract.DynamoEntry.COLUMN_VALUE + " TEXT, " +
+                DatabaseContract.DynamoEntry.COLUMN_OWNER_ID + " INTEGER, " +
                 DatabaseContract.DynamoEntry.COLUMN_CONTEXT + " TEXT " +
                 " );";
         db.execSQL(SQL_CREATE_TABLE);

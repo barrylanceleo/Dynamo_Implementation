@@ -1,19 +1,28 @@
 package edu.buffalo.cse.cse486586.simpledynamo;
 
-/**
- * Created by barry on 4/24/16.
- */
 public class MessageContract {
 
     public static final int RESPONSE_TIMEOUT = 500;
     public static int messageCounter = 0;
 
     public static class Type {
-        // message types for insert operation
+        // types for insert operation
         final static int MSG_INSERT_INITIATE_REQUEST = 100;
         final static int MSG_INSERT_REQUEST = 101;
         final static int MSG_INSERT_RESPONSE = 102;
         final static int MSG_INSERT_INITIATE_RESPONSE = 103;
+
+        // types for query operation
+        final static int MSG_QUERY_INITIATE_REQUEST =200;
+        final static int MSG_QUERY_REQUEST = 201;
+        final static int MSG_QUERY_RESPONSE = 202;
+        final static int MSG_QUERY_INITIATE_RESPONSE = 203;
+
+        // types for delete operation
+        final static int MSG_DELETE_INITIATE_REQUEST =300;
+        final static int MSG_DELETE_REQUEST = 301;
+        final static int MSG_DELETE_RESPONSE = 302;
+        final static int MSG_DELETE_INITIATE_RESPONSE = 303;
     }
 
     public static class ResponseFlag {

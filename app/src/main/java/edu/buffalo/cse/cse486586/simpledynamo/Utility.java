@@ -1,17 +1,21 @@
 package edu.buffalo.cse.cse486586.simpledynamo;
 
+import android.database.Cursor;
+import android.database.MatrixCursor;
+import android.util.JsonWriter;
 import android.util.Log;
 
+import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
-/**
- * Created by barry on 4/23/16.
- */
+import java.io.IOException;
+import java.io.StringWriter;
+
 public class Utility {
     private static final String LOG_TAG = Utility.class.getSimpleName();
 
-    public static String buildMessageContent (String key, String value, String context) {
+    public static String buildkeyValueContent (String key, String value, String context) {
         JSONObject message = new JSONObject();
         try {
             message.put(MessageContract.Field.MSG_CONTENT_KEY, key);
@@ -30,15 +34,7 @@ public class Utility {
             jsonMessage.put(MessageContract.Field.MSG_FIELD_ID, messaage.id);
             jsonMessage.put(MessageContract.Field.MSG_FIELD_SOURCE_ID, messaage.sourceId);
             jsonMessage.put(MessageContract.Field.MSG_FIELD_COORDINATOR_ID, messaage.coordinatorId);
-
-            // message content
-            JSONObject jsonContent = new JSONObject();
-            jsonContent.put(MessageContract.Field.MSG_CONTENT_KEY, messaage.content.key);
-            jsonContent.put(MessageContract.Field.MSG_CONTENT_VALUE, messaage.content.value);
-            jsonContent.put(MessageContract.Field.MSG_CONTENT_CONTEXT, messaage.content.context);
-            jsonMessage.put(MessageContract.Field.MSG_FIELD_CONTENT, jsonContent);
-
-            jsonMessage.put(MessageContract.Field.MSG_FIELD_RESPONSE_FLAG, messaage.responseFlag);
+            jsonMessage.put(MessageContract.Field.MSG_FIELD_CONTENT, messaage.content);
         } catch (JSONException e) {
             Log.e(LOG_TAG, "Unable convert Message to JSON", e);
         }
@@ -54,16 +50,7 @@ public class Utility {
                     messageJSON.getInt(MessageContract.Field.MSG_FIELD_ID),
                     messageJSON.getInt(MessageContract.Field.MSG_FIELD_SOURCE_ID));
             message.coordinatorId = messageJSON.getInt(MessageContract.Field.MSG_FIELD_COORDINATOR_ID);
-
-            // message content
-            JSONObject contentJSON = new JSONObject(
-                    messageJSON.getString(MessageContract.Field.MSG_FIELD_CONTENT));
-            message.content = message.new Content(
-                    contentJSON.getString(MessageContract.Field.MSG_CONTENT_KEY),
-                    contentJSON.getString(MessageContract.Field.MSG_CONTENT_VALUE),
-                    contentJSON.getString(MessageContract.Field.MSG_CONTENT_CONTEXT));
-
-            message.responseFlag = messageJSON.getInt(MessageContract.Field.MSG_FIELD_RESPONSE_FLAG);
+            message.content = messageJSON.getString(MessageContract.Field.MSG_FIELD_CONTENT);
         } catch (JSONException e) {
             Log.e(LOG_TAG, "Exception: Improper Message Format.");
             return null;
@@ -72,5 +59,51 @@ public class Utility {
             return null;
         }
         return message;
+    }
+
+    public static Cursor convertQueryResponseToCursor(String queryResponse){
+        JSONArray messageJSON = null;
+        MatrixCursor cursor = new MatrixCursor(new String[]{DatabaseContract.DynamoEntry.COLUMN_KEY,
+                DatabaseContract.DynamoEntry.COLUMN_VALUE, DatabaseContract.DynamoEntry.COLUMN_CONTEXT});
+        try {
+            messageJSON = new JSONArray(queryResponse);
+            for(int i = 0; i < messageJSON.length(); i++){
+                JSONObject jObject = messageJSON.getJSONObject(i);
+                String key = jObject.getString(MessageContract.Field.MSG_CONTENT_KEY);
+                String value = jObject.getString(MessageContract.Field.MSG_CONTENT_VALUE);
+                String context = jObject.getString(MessageContract.Field.MSG_CONTENT_CONTEXT);
+                cursor.addRow(new String[]{key, value, context});
+            }
+        } catch (JSONException e) {
+            Log.e(LOG_TAG, "Exception: Improper Message Format.", e);
+        }
+        cursor.moveToFirst();
+        return cursor;
+    }
+    public static String convertCursorToString(Cursor cursor) {
+        cursor.moveToFirst();
+        StringWriter sWriter = new StringWriter();
+        JsonWriter jWriter = new JsonWriter(sWriter);
+        try {
+            jWriter.beginArray();
+            while(!cursor.isAfterLast())
+            {
+                String key = cursor.getString(cursor.getColumnIndex(DatabaseContract.DynamoEntry.COLUMN_KEY));
+                String value = cursor.getString(cursor.getColumnIndex(DatabaseContract.DynamoEntry.COLUMN_KEY));
+                String context = cursor.getString(cursor.getColumnIndex(DatabaseContract.DynamoEntry.COLUMN_CONTEXT));
+                jWriter.beginObject();
+                jWriter.name(MessageContract.Field.MSG_CONTENT_KEY).value(key);
+                jWriter.name(MessageContract.Field.MSG_CONTENT_VALUE).value(value);
+                jWriter.name(MessageContract.Field.MSG_CONTENT_CONTEXT).value(context);
+                jWriter.endObject();
+                cursor.moveToNext();
+            }
+            jWriter.endArray();
+            jWriter.close();
+            cursor.moveToFirst();
+        } catch (IOException e) {
+            Log.e(LOG_TAG, "Exception: IO Exception in JsonWriter.", e);
+        }
+        return sWriter.toString();
     }
 }
