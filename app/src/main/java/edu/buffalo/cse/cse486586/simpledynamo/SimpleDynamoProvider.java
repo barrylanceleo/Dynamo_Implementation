@@ -132,29 +132,80 @@ public class SimpleDynamoProvider extends ContentProvider {
 		getContext().getContentResolver().notifyChange(uri, null);
 		return returnUri;
 	}
+    @Override
+    public int bulkInsert(Uri uri, ContentValues[] values) {
+        final SQLiteDatabase db = mDynamoDbHelper.getWritableDatabase();
+        switch (sUriMatcher.match(uri)) {
+            case NODE:
+                int insertCount = 0;
+                for (ContentValues cv : values) {
+                    String key = cv.getAsString(DatabaseContract.DynamoEntry.COLUMN_KEY);
+                    String value = cv.getAsString(DatabaseContract.DynamoEntry.COLUMN_VALUE);
+                    int owner_id = mCoordinator.findCoordinatingNode(key).id;
+                    cv.put(DatabaseContract.DynamoEntry.COLUMN_OWNER_ID, owner_id);
+                    db.beginTransaction();
+                    Cursor oldValue = db.query(
+                            DatabaseContract.DynamoEntry.TABLE_NAME,
+                            null,
+                            "key=?",
+                            new String[]{key},
+                            null,
+                            null,
+                            null
+                    );
+                    // if key not present already insert context = 1, else ++context
+                    if (oldValue.getCount() == 0) {
+                        cv.put(DatabaseContract.DynamoEntry.COLUMN_CONTEXT,
+                                Integer.toString(1));
+                    } else {
+                        oldValue.moveToFirst();
+                        String oldContext = oldValue.getString(oldValue.getColumnIndex(
+                                DatabaseContract.DynamoEntry.COLUMN_CONTEXT));
+                        cv.put(DatabaseContract.DynamoEntry.COLUMN_CONTEXT,
+                                Integer.toString(Integer.parseInt(oldContext) + 1));
+                    }
+                    oldValue.close();
 
-    public Cursor plainQuery(Uri uri, String[] projection, String selection, String[] selectionArgs,
-                             String sortOrder){
-        SQLiteDatabase db = mDynamoDbHelper.getReadableDatabase();
-
-        Cursor c = db.query(
-                DatabaseContract.DynamoEntry.TABLE_NAME,
-                projection,    // The columns to return from the query
-                selection,     // The columns for the where clause
-                selectionArgs, // The values for the where clause
-                null,          // don't group the rows
-                null,          // don't filter by row groups
-                sortOrder        // The sort order
-        );
-
-         c.moveToFirst();
-
-        // Tells the Cursor what URI to watch, so it knows when its source data changes
-        c.setNotificationUri(getContext().getContentResolver(), uri);
-        return c;
+                    // insert
+                    long _id;
+                    _id = db.insertWithOnConflict(DatabaseContract.DynamoEntry.TABLE_NAME, null,
+                            cv, SQLiteDatabase.CONFLICT_REPLACE);
+                    if (_id > 0) {
+                        insertCount++;
+                    }
+                }
+                db.setTransactionSuccessful();
+                db.endTransaction();
+                return insertCount;
+            default:
+                return super.bulkInsert(uri, values);
+        }
     }
 
-	@Override
+    // used for re-synchronization, uses the context and coordinator id present in the Cv
+    public int blindBulkInsert(Uri uri, ContentValues[] values) {
+        final SQLiteDatabase db = mDynamoDbHelper.getWritableDatabase();
+        switch (sUriMatcher.match(uri)) {
+            case NODE:
+                int insertCount = 0;
+                for (ContentValues cv : values) {
+                    db.beginTransaction();
+                    long _id;
+                    _id = db.insertWithOnConflict(DatabaseContract.DynamoEntry.TABLE_NAME, null,
+                            cv, SQLiteDatabase.CONFLICT_REPLACE);
+                    if (_id > 0) {
+                        insertCount++;
+                    }
+                }
+                db.setTransactionSuccessful();
+                db.endTransaction();
+                return insertCount;
+            default:
+                return super.bulkInsert(uri, values);
+        }
+    }
+
+    @Override
 	public Cursor query(Uri uri, String[] projection, String selection,
 			String[] selectionArgs, String sortOrder) {
         final SQLiteDatabase db = mDynamoDbHelper.getReadableDatabase();
@@ -214,9 +265,70 @@ public class SimpleDynamoProvider extends ContentProvider {
 
 	@Override
 	public int delete(Uri uri, String selection, String[] selectionArgs) {
-		// TODO Auto-generated method stub
-		return 0;
+        Log.v(LOG_TAG, "DELETE: KEY: " + selection);
+        String key = selection;
+        switch (sUriMatcher.match(uri)) {
+            case NODE:
+                if(key == null) {
+                    // delete all the entries in my node
+                    return deleteAll(DatabaseContract.DynamoEntry.NODE_URI);
+                }
+                else {
+                    // delete is insert with null value
+                    ContentValues deleteCv = new ContentValues();
+                    deleteCv.put(DatabaseContract.DynamoEntry.COLUMN_KEY, key);
+                    deleteCv.put(DatabaseContract.DynamoEntry.COLUMN_VALUE, (String) null);
+                    insert(DatabaseContract.DynamoEntry.NODE_URI, deleteCv);
+                    return 1;
+                }
+            case DYNAMO:
+                if(selection.equals("*")) {
+                    // forward the request to myself
+                    Message initiateMessage = new Message(MessageContract.Type.MSG_DELETE_INITIATE_REQUEST,
+                            MessageContract.messageCounter++, mCoordinator.MY_ID);
+                    initiateMessage.coordinatorId = 0;
+                    initiateMessage.content = key;
+                    // send and wait for response
+                    Message response = sendAndWaitForResponse(
+                            initiateMessage, mCoordinator.MY_PORT);
+                    // convert response to cursor
+                    return Integer.parseInt(response.content);
+                }
+                else if(selection.equals("@")) {
+                    // just delete all the entries in my node
+                    selection = null;
+                    selectionArgs = null;
+                    return delete(DatabaseContract.DynamoEntry.NODE_URI,
+                            selection, selectionArgs);
+                }
+                else {
+                    // forward the request to the coordinator
+                    Message initiateMessage = new Message(MessageContract.Type.MSG_DELETE_INITIATE_REQUEST,
+                            MessageContract.messageCounter++, mCoordinator.MY_ID);
+                    initiateMessage.coordinatorId = 0;
+                    initiateMessage.content = Utility.buildkeyValueContent(key, null, null);
+                    // send and wait for response
+                    Message response = sendAndWaitForResponse(
+                            initiateMessage, mCoordinator.findCoordinatingNode(key).port);
+                    // convert response to cursor
+                    return Integer.parseInt(response.content);
+                }
+            default:
+                throw new UnsupportedOperationException("Unknown uri: " + uri);
+        }
 	}
+
+    private int deleteAll(Uri uri) {
+        switch (sUriMatcher.match(uri)) {
+            case NODE:
+                // query all the values and update their values with null
+                Cursor queryCursor = query(DatabaseContract.DynamoEntry.NODE_URI, null, null, null, null);
+                ContentValues [] queryCvs = Utility.convertCursorToCvArray(queryCursor);
+                return bulkInsert(DatabaseContract.DynamoEntry.NODE_URI, queryCvs);
+            default:
+                throw new UnsupportedOperationException("Unknown uri: " + uri);
+        }
+    }
 
 	@Override
 	public int update(Uri uri, ContentValues values, String selection,

@@ -1,5 +1,6 @@
 package edu.buffalo.cse.cse486586.simpledynamo;
 
+import android.content.ContentValues;
 import android.database.Cursor;
 import android.database.MatrixCursor;
 import android.util.JsonWriter;
@@ -89,7 +90,7 @@ public class Utility {
             while(!cursor.isAfterLast())
             {
                 String key = cursor.getString(cursor.getColumnIndex(DatabaseContract.DynamoEntry.COLUMN_KEY));
-                String value = cursor.getString(cursor.getColumnIndex(DatabaseContract.DynamoEntry.COLUMN_KEY));
+                String value = cursor.getString(cursor.getColumnIndex(DatabaseContract.DynamoEntry.COLUMN_VALUE));
                 String context = cursor.getString(cursor.getColumnIndex(DatabaseContract.DynamoEntry.COLUMN_CONTEXT));
                 jWriter.beginObject();
                 jWriter.name(MessageContract.Field.MSG_CONTENT_KEY).value(key);
@@ -105,5 +106,23 @@ public class Utility {
             Log.e(LOG_TAG, "Exception: IO Exception in JsonWriter.", e);
         }
         return sWriter.toString();
+    }
+
+    public static ContentValues [] convertCursorToCvArray(Cursor cursor) {
+        cursor.moveToFirst();
+        ContentValues [] cvs = new ContentValues[cursor.getCount()];
+        while(!cursor.isAfterLast())
+        {
+            String key = cursor.getString(cursor.getColumnIndex(DatabaseContract.DynamoEntry.COLUMN_KEY));
+            String value = cursor.getString(cursor.getColumnIndex(DatabaseContract.DynamoEntry.COLUMN_VALUE));
+            String context = cursor.getString(cursor.getColumnIndex(DatabaseContract.DynamoEntry.COLUMN_CONTEXT));
+            ContentValues cv = new ContentValues();
+            cv.put(DatabaseContract.DynamoEntry.COLUMN_KEY, key);
+            cv.put(DatabaseContract.DynamoEntry.COLUMN_VALUE, value);
+            cv.put(DatabaseContract.DynamoEntry.COLUMN_CONTEXT, context);
+            cursor.moveToNext();
+        }
+        cursor.moveToFirst();
+        return cvs;
     }
 }

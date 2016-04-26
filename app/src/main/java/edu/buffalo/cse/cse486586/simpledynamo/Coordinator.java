@@ -158,9 +158,13 @@ public class Coordinator {
         Log.i(LOG_TAG, "Starting to process messages.");
         while(true){
             try {
-                String message = receivedMessageQueue.take();
-                // TODO handle message should go to a new thread
-                handleMessage(message);
+                final String message = receivedMessageQueue.take();
+                Thread handleMessageThread = new Thread(new Runnable() {
+                    public void run()
+                    {
+                        handleMessage(message);
+                    }});
+                handleMessageThread.start();
             } catch (InterruptedException e) {
                 Log.e(LOG_TAG, "Exception: Message Consumer was interrupted.", e);
             }
@@ -291,7 +295,7 @@ public class Coordinator {
             break;
             case MessageContract.Type.MSG_INSERT_RESPONSE: {
                 // add the response to the response queue
-                LinkedBlockingQueue responseQueue = (LinkedBlockingQueue<Message>)
+                LinkedBlockingQueue<Message> responseQueue = (LinkedBlockingQueue<Message>)
                         messageMap.get(handledMessage.id);
                 try {
                     if(responseQueue != null) {
@@ -421,7 +425,7 @@ public class Coordinator {
             break;
             case MessageContract.Type.MSG_QUERY_RESPONSE: {
                 // add the response to the response queue
-                LinkedBlockingQueue responseQueue = (LinkedBlockingQueue<Message>)
+                LinkedBlockingQueue<Message> responseQueue = (LinkedBlockingQueue<Message>)
                         messageMap.get(handledMessage.id);
                 try {
                     if(responseQueue != null) {
@@ -429,6 +433,139 @@ public class Coordinator {
                     }
                 } catch (InterruptedException e) {
                     Log.e(LOG_TAG, "INSERT: Interrupted " +
+                            "while adding response to queue." + handledMessage, e);
+                }
+            }
+            break;
+            case MessageContract.Type.MSG_DELETE_INITIATE_REQUEST: {
+                String key = handledMessage.content;
+                if(key.equals("*")) {
+                    // send "@" delete cmds to all nodes
+                    Message deleteMessage = new Message(handledMessage);
+                    deleteMessage.type = MessageContract.Type.MSG_DELETE_REQUEST;
+                    deleteMessage.id = MessageContract.messageCounter++;
+                    deleteMessage.coordinatorId = MY_ID;
+                    for (Node node : NODE_LIST) {
+                        mSender.sendMessage(Utility.convertMessageToJSON(deleteMessage),
+                                node.port);
+                    }
+
+                    // create a blocking queue to keep track of the responses
+                    LinkedBlockingQueue<Message> responseQueue = new LinkedBlockingQueue<Message>();
+                    messageMap.put(deleteMessage.id, responseQueue);
+
+                    // poll till we receive all responses
+                    List<Message> responses = new ArrayList<Message>();
+                    for (int i = 0; i < NODE_LIST.size(); i++) {
+                        try {
+                            responses.add(responseQueue.poll(
+                                    MessageContract.RESPONSE_TIMEOUT, TimeUnit.MILLISECONDS));
+                        } catch (InterruptedException e) {
+                            Log.e(LOG_TAG, "INSERT: Interrupted " +
+                                    "while waiting for response to: " + deleteMessage, e);
+                        }
+                    }
+                    // remove the message from the messageMap
+                    messageMap.remove(deleteMessage.id);
+
+                    // count the total number of entreies deleted and send a response to the source
+                    int deletedCount = 0;
+                    for(Message response : responses) {
+                        deletedCount += Integer.parseInt(response.content);
+                    }
+                    handledMessage.type = MessageContract.Type.MSG_DELETE_INITIATE_RESPONSE;
+                    handledMessage.coordinatorId = MY_ID;
+                    handledMessage.content = Integer.toString(deletedCount);
+                    mSender.sendMessage(Utility.convertMessageToJSON(handledMessage),
+                            NODE_MAP.get(handledMessage.sourceId).port);
+                }
+                else {
+                    // send delete commands to the preference list
+                    List<Node> preferenceList = getPreferenceList(key);
+                    Message deleteMessage = new Message(handledMessage);
+                    deleteMessage.type = MessageContract.Type.MSG_DELETE_REQUEST;
+                    deleteMessage.id = MessageContract.messageCounter++;
+                    deleteMessage.coordinatorId = MY_ID;
+                    for (Node node : preferenceList) {
+                        mSender.sendMessage(Utility.convertMessageToJSON(deleteMessage),
+                                node.port);
+                    }
+
+                    // create a blocking queue to keep track of the responses
+                    LinkedBlockingQueue<Message> responseQueue = new LinkedBlockingQueue<Message>();
+                    messageMap.put(deleteMessage.id, responseQueue);
+
+                    // poll till we receive all responses or timeout
+                    List<Message> responses = new ArrayList<Message>();
+                    for (int i = 0; i < DynamoContract.W; i++) {
+                        try {
+                            responses.add(responseQueue.poll(
+                                    MessageContract.RESPONSE_TIMEOUT, TimeUnit.MILLISECONDS));
+                        } catch (InterruptedException e) {
+                            Log.e(LOG_TAG, "DELETE: Interrupted " +
+                                    "while waiting for response to: " + deleteMessage, e);
+                        }
+                    }
+                    // remove the message from the messageMap
+                    messageMap.remove(deleteMessage.id);
+
+                    // check if we received enough responses and send a response to the source
+                    if (responses.size() < DynamoContract.W) {
+                        Log.e(LOG_TAG, "DELETE: Received only  " + responses.size() + "responses" +
+                                " for message: " + deleteMessage);
+                    } else {
+                        handledMessage.type = MessageContract.Type.MSG_DELETE_INITIATE_RESPONSE;
+                        handledMessage.coordinatorId = MY_ID;
+                        mSender.sendMessage(Utility.convertMessageToJSON(handledMessage),
+                                NODE_MAP.get(handledMessage.sourceId).port);
+                    }
+                }
+            }
+            break;
+            case MessageContract.Type.MSG_DELETE_INITIATE_RESPONSE: {
+                // notify that we have received the response
+                Message sentMessage = (Message) messageMap.get(handledMessage.id);
+                if(sentMessage != null) {
+                    messageMap.put(handledMessage.id, handledMessage);
+                    synchronized (sentMessage) {
+                        notify();
+                    }
+                }
+            }
+            break;
+            case MessageContract.Type.MSG_DELETE_REQUEST: {
+                // setup the delete parameters
+                String selection;
+                String [] selectionArgs;
+                if(handledMessage.content.equals("*"))
+                {
+                    selection = null;
+                    selectionArgs = null;
+                }
+                else {
+                    selection = "key=?";
+                    selectionArgs = new String[] {handledMessage.content};
+                }
+                // query my content provider
+                int deletedCount = mContext.getContentResolver().delete(DatabaseContract.DynamoEntry.NODE_URI,
+                        selection, selectionArgs);
+                // send a response to the coordinator
+                handledMessage.type = MessageContract.Type.MSG_DELETE_RESPONSE;
+                handledMessage.content = Integer.toString(deletedCount);
+                mSender.sendMessage(Utility.convertMessageToJSON(handledMessage),
+                        handledMessage.coordinatorId);
+            }
+            break;
+            case MessageContract.Type.MSG_DELETE_RESPONSE: {
+                // add the response to the response queue
+                LinkedBlockingQueue<Message> responseQueue = (LinkedBlockingQueue<Message>)
+                        messageMap.get(handledMessage.id);
+                try {
+                    if(responseQueue != null) {
+                        responseQueue.put(handledMessage);
+                    }
+                } catch (InterruptedException e) {
+                    Log.e(LOG_TAG, "DELETE: Interrupted " +
                             "while adding response to queue." + handledMessage, e);
                 }
             }
