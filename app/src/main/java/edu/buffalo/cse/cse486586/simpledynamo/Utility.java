@@ -12,6 +12,7 @@ import org.json.JSONObject;
 
 import java.io.IOException;
 import java.io.StringWriter;
+import java.util.List;
 
 public class Utility {
     private static final String LOG_TAG = Utility.class.getSimpleName();
@@ -62,12 +63,11 @@ public class Utility {
         return message;
     }
 
-    public static Cursor convertQueryResponseToCursor(String queryResponse){
-        JSONArray messageJSON = null;
+    public static Cursor convertResponseToCursor(String queryResponse){
         MatrixCursor cursor = new MatrixCursor(new String[]{DatabaseContract.DynamoEntry.COLUMN_KEY,
                 DatabaseContract.DynamoEntry.COLUMN_VALUE, DatabaseContract.DynamoEntry.COLUMN_CONTEXT});
         try {
-            messageJSON = new JSONArray(queryResponse);
+            JSONArray messageJSON = new JSONArray(queryResponse);
             for(int i = 0; i < messageJSON.length(); i++){
                 JSONObject jObject = messageJSON.getJSONObject(i);
                 String key = jObject.getString(MessageContract.Field.MSG_CONTENT_KEY);
@@ -81,6 +81,30 @@ public class Utility {
         cursor.moveToFirst();
         return cursor;
     }
+
+    public static ContentValues[] convertResponseToCvArray(String queryResponse){
+        ContentValues [] cvs;
+        try {
+            JSONArray messageJSON = new JSONArray(queryResponse);
+            cvs = new ContentValues[messageJSON.length()];
+            for(int i = 0; i < messageJSON.length(); i++){
+                ContentValues cv = new ContentValues();
+                JSONObject jObject = messageJSON.getJSONObject(i);
+                cv.put(DatabaseContract.DynamoEntry.COLUMN_KEY,
+                        jObject.getString(MessageContract.Field.MSG_CONTENT_KEY));
+                cv.put(DatabaseContract.DynamoEntry.COLUMN_VALUE,
+                        jObject.getString(MessageContract.Field.MSG_CONTENT_VALUE));
+                cv.put(DatabaseContract.DynamoEntry.COLUMN_CONTEXT,
+                        jObject.getString(MessageContract.Field.MSG_CONTENT_CONTEXT));
+                cvs[i] = cv;
+            }
+            return cvs;
+        } catch (JSONException e) {
+            Log.e(LOG_TAG, "Exception: Improper Message Format.", e);
+            return new ContentValues[]{};
+        }
+    }
+
     public static String convertCursorToString(Cursor cursor) {
         cursor.moveToFirst();
         StringWriter sWriter = new StringWriter();
@@ -108,6 +132,37 @@ public class Utility {
         return sWriter.toString();
     }
 
+    public static String nodeListToString(List<Coordinator.Node> nodes) {
+        StringWriter sWriter = new StringWriter();
+        JsonWriter jWriter = new JsonWriter(sWriter);
+        try {
+            jWriter.beginArray();
+            for(Coordinator.Node node : nodes) {
+                jWriter.value(node.id);
+            }
+            jWriter.endArray();
+            jWriter.close();
+        } catch (IOException e) {
+            Log.e(LOG_TAG, "Exception: IO Exception in JsonWriter.", e);
+        }
+        return sWriter.toString();
+    }
+
+    public static String [] stringToNodeIdList(String nodeIds) {
+        String [] nodeIdArray;
+        try {
+            JSONArray nodeIdJSON = new JSONArray(nodeIds);
+            nodeIdArray = new String[nodeIdJSON.length()];
+            for(int i = 0; i < nodeIdJSON.length(); i++){
+                nodeIdArray[i] = Integer.toString(nodeIdJSON.getInt(i));
+            }
+            return nodeIdArray;
+        } catch (JSONException e) {
+            Log.e(LOG_TAG, "Exception: Improper Message Format.", e);
+            return new String [] {};
+        }
+    }
+
     public static ContentValues [] convertCursorToCvArray(Cursor cursor) {
         cursor.moveToFirst();
         ContentValues [] cvs = new ContentValues[cursor.getCount()];
@@ -124,5 +179,12 @@ public class Utility {
         }
         cursor.moveToFirst();
         return cvs;
+    }
+
+    public static void printNodeList(List<Coordinator.Node> nodes)
+    {
+        for(Coordinator.Node node : nodes) {
+            Log.i(LOG_TAG, node.toString());
+        }
     }
 }

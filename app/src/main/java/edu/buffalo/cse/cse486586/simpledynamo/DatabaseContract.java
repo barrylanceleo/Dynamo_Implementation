@@ -9,11 +9,13 @@ public class DatabaseContract {
 
     // path to access node specific data
     public static final String PATH_NODE = "node";
+    public static final String PATH_BLIND = "blind";
 
     // defines the dynamo table
     public static final class DynamoEntry {
         public static final Uri DYNAMO_URI = BASE_CONTENT_URI;
         public static final Uri NODE_URI = BASE_CONTENT_URI.buildUpon().appendPath(PATH_NODE).build();
+        public static final Uri BLIND_URI = BASE_CONTENT_URI.buildUpon().appendPath(PATH_BLIND).build();
 
         public static final String CONTENT_TYPE =
                 ContentResolver.CURSOR_DIR_BASE_TYPE + "/" + CONTENT_AUTHORITY;

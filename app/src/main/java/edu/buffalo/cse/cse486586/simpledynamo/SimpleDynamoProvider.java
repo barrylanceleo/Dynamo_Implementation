@@ -8,6 +8,8 @@ import android.database.sqlite.SQLiteDatabase;
 import android.net.Uri;
 import android.util.Log;
 
+import java.util.List;
+
 
 public class SimpleDynamoProvider extends ContentProvider {
 
@@ -20,6 +22,8 @@ public class SimpleDynamoProvider extends ContentProvider {
 	// URI types
 	static final int DYNAMO = 100;
 	static final int NODE = 200;
+    static final int BLIND = 300;
+
 
     private static Coordinator mCoordinator;
 	private static Thread backgroundThread;
@@ -31,26 +35,30 @@ public class SimpleDynamoProvider extends ContentProvider {
 		// For each type of URI you want to add, create a corresponding code.
 		matcher.addURI(authority, null, DYNAMO);
 		matcher.addURI(authority, DatabaseContract.PATH_NODE, NODE);
-		return matcher;
+        matcher.addURI(authority, DatabaseContract.PATH_NODE, BLIND);
+
+        return matcher;
 	}
 
 	@Override
 	public boolean onCreate() {
 		Log.i(LOG_TAG, "Creating the Content Provider.");
-		// start everything in a background thread
-		if(backgroundThread == null) {
-			backgroundThread = new Thread(new Runnable() {
-				public void run()
-				{
-					mCoordinator = Coordinator.getInstance(getContext());
-					mCoordinator.start();
-				}});
-			backgroundThread.start();
-			Log.i(LOG_TAG, "Started Coordinator in a new thread.");
-		}
-
-		// Create a Database helper
-		mDynamoDbHelper = new DynamoDbHelper(getContext());
+        // Create a Database helper
+        mDynamoDbHelper = new DynamoDbHelper(getContext());
+        // create the coordinator
+        mCoordinator = Coordinator.getInstance(getContext());
+        // start handling requests in a background thread,
+        // this will process only re-sync responses until re-sync is completed
+        mCoordinator.isResynced = false;
+        backgroundThread = new Thread(new Runnable() {
+            public void run()
+            {
+                mCoordinator.start();
+            }});
+        backgroundThread.start();
+        // re-sync
+        mCoordinator.resync();
+        Log.i(LOG_TAG, "Node started and re-synced.");
 		return true;
 	}
 
@@ -123,7 +131,7 @@ public class SimpleDynamoProvider extends ContentProvider {
 				initiateMessage.coordinatorId = 0;
 				initiateMessage.content = Utility.buildkeyValueContent(key, value, null);
                 // send and wait for response
-				sendAndWaitForResponse(initiateMessage, mCoordinator.findCoordinatingNode(key).port);
+				sendAndWaitForResponse(initiateMessage, mCoordinator.getPreferenceList(key));
 				returnUri = DatabaseContract.DynamoEntry.DYNAMO_URI.buildUpon().appendPath(key).build();
 				break;
 			default:
@@ -136,11 +144,12 @@ public class SimpleDynamoProvider extends ContentProvider {
     public int bulkInsert(Uri uri, ContentValues[] values) {
         final SQLiteDatabase db = mDynamoDbHelper.getWritableDatabase();
         switch (sUriMatcher.match(uri)) {
+            case BLIND:
+                return blindBulkInsert(uri, values);
             case NODE:
                 int insertCount = 0;
                 for (ContentValues cv : values) {
                     String key = cv.getAsString(DatabaseContract.DynamoEntry.COLUMN_KEY);
-                    String value = cv.getAsString(DatabaseContract.DynamoEntry.COLUMN_VALUE);
                     int owner_id = mCoordinator.findCoordinatingNode(key).id;
                     cv.put(DatabaseContract.DynamoEntry.COLUMN_OWNER_ID, owner_id);
                     db.beginTransaction();
@@ -178,7 +187,7 @@ public class SimpleDynamoProvider extends ContentProvider {
                 db.endTransaction();
                 return insertCount;
             default:
-                return super.bulkInsert(uri, values);
+                throw new UnsupportedOperationException("Unknown uri: " + uri);
         }
     }
 
@@ -186,22 +195,25 @@ public class SimpleDynamoProvider extends ContentProvider {
     public int blindBulkInsert(Uri uri, ContentValues[] values) {
         final SQLiteDatabase db = mDynamoDbHelper.getWritableDatabase();
         switch (sUriMatcher.match(uri)) {
-            case NODE:
-                int insertCount = 0;
+            case BLIND:
+                int insertedCount = 0;
                 for (ContentValues cv : values) {
+                    String key = cv.getAsString(DatabaseContract.DynamoEntry.COLUMN_KEY);
+                    int owner_id = mCoordinator.findCoordinatingNode(key).id;
+                    cv.put(DatabaseContract.DynamoEntry.COLUMN_OWNER_ID, owner_id);
                     db.beginTransaction();
                     long _id;
                     _id = db.insertWithOnConflict(DatabaseContract.DynamoEntry.TABLE_NAME, null,
                             cv, SQLiteDatabase.CONFLICT_REPLACE);
                     if (_id > 0) {
-                        insertCount++;
+                        insertedCount++;
                     }
                 }
                 db.setTransactionSuccessful();
                 db.endTransaction();
-                return insertCount;
+                return insertedCount;
             default:
-                return super.bulkInsert(uri, values);
+                throw new UnsupportedOperationException("Unknown uri: " + uri);
         }
     }
 
@@ -234,10 +246,9 @@ public class SimpleDynamoProvider extends ContentProvider {
                     initiateMessage.coordinatorId = 0;
                     initiateMessage.content = key;
                     // send and wait for response
-                    Message response = sendAndWaitForResponse(
-                            initiateMessage, mCoordinator.MY_PORT);
+                    Message response = sendAndWaitForResponse(initiateMessage, mCoordinator.getPreferenceList(key));
                     // convert response to cursor
-                    return Utility.convertQueryResponseToCursor(response.content);
+                    return Utility.convertResponseToCursor(response.content);
                 }
                 else if(selection.equals("@")) {
                     // just return all the entries in my node
@@ -254,9 +265,9 @@ public class SimpleDynamoProvider extends ContentProvider {
                     initiateMessage.content = key;
                     // send and wait for response
                     Message response = sendAndWaitForResponse(
-                            initiateMessage, mCoordinator.findCoordinatingNode(key).port);
+                            initiateMessage,mCoordinator.getPreferenceList(key));
                     // convert response to cursor
-                    return Utility.convertQueryResponseToCursor(response.content);
+                    return Utility.convertResponseToCursor(response.content);
                 }
             default:
                 throw new UnsupportedOperationException("Unknown uri: " + uri);
@@ -290,7 +301,7 @@ public class SimpleDynamoProvider extends ContentProvider {
                     initiateMessage.content = key;
                     // send and wait for response
                     Message response = sendAndWaitForResponse(
-                            initiateMessage, mCoordinator.MY_PORT);
+                            initiateMessage, mCoordinator.getPreferenceList(key));
                     // convert response to cursor
                     return Integer.parseInt(response.content);
                 }
@@ -309,7 +320,7 @@ public class SimpleDynamoProvider extends ContentProvider {
                     initiateMessage.content = Utility.buildkeyValueContent(key, null, null);
                     // send and wait for response
                     Message response = sendAndWaitForResponse(
-                            initiateMessage, mCoordinator.findCoordinatingNode(key).port);
+                            initiateMessage, mCoordinator.getPreferenceList(key));
                     // convert response to cursor
                     return Integer.parseInt(response.content);
                 }
@@ -337,29 +348,32 @@ public class SimpleDynamoProvider extends ContentProvider {
 		return 0;
 	}
 
-    Message sendAndWaitForResponse(Message message, int port) {
-        mCoordinator.mSender.sendMessage(Utility.convertMessageToJSON(message), port);
-        // messageMap is used to keep track of the sent messaged
-        mCoordinator.messageMap.put(message.id, message);
-        int sendType = message.type;
-        Message response = null;
-        synchronized (message) {
-            try {
-                wait(MessageContract.RESPONSE_TIMEOUT);
-                response = (Message) mCoordinator.messageMap.remove(message.id);
-                if(sendType != response.type) {
-                    Log.i(LOG_TAG, "Response Received: " +response);
+    Message sendAndWaitForResponse(Message message, List<Coordinator.Node> nodesToTry) {
+        for(Coordinator.Node node: nodesToTry) {
+            mCoordinator.mSender.sendMessage(Utility.convertMessageToJSON(message), node.port);
+            // messageMap is used to keep track of the sent messaged
+            mCoordinator.messageMap.put(message.id, message);
+            int sendType = message.type;
+            Message response = null;
+            synchronized (message) {
+                try {
+                    wait(MessageContract.RESPONSE_TIMEOUT);
+                    response = (Message) mCoordinator.messageMap.remove(message.id);
+                    if(sendType != response.type) {
+                        Log.i(LOG_TAG, "Response Received: " +response);
+                        return response;
+                    }
+                    else {
+                        Log.e(LOG_TAG, "Node Id: " +response.coordinatorId +"has failed.\n" +
+                                "Forwarding request to next node.");
+                    }
+                } catch (InterruptedException e)
+                {
+                    Log.e(LOG_TAG, "Request interrupted before receiving a response", e);
                 }
-                else {
-                    // TODO Handle Failure, Need to forward request to next node.
-                    Log.e(LOG_TAG, "Node Id: " +response.coordinatorId +"has failed.\n" +
-                            "Need to forward request to next node.");
-                }
-            } catch (InterruptedException e)
-            {
-                Log.e(LOG_TAG, "Insert interrupted before receiving a response", e);
             }
         }
-        return response;
+        Log.e(LOG_TAG, "Did not receive response from any node in sendAndWaitForResponse(). This is bad.");
+        return null;
     }
 }

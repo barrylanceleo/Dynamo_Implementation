@@ -23,6 +23,10 @@ public class MessageContract {
         final static int MSG_DELETE_REQUEST = 301;
         final static int MSG_DELETE_RESPONSE = 302;
         final static int MSG_DELETE_INITIATE_RESPONSE = 303;
+
+        // types for sync operation
+        final static int MSG_SYNC_REQUEST = 400;
+        final static int MSG_SYNC_RESPONSE = 401;
     }
 
     public static class ResponseFlag {

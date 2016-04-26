@@ -37,6 +37,9 @@ public class Coordinator {
     final Map<Integer, Node> NODE_MAP;
     final List<Node> PREFERENCE_LIST;
 
+    // this is set only when re-sync is completed on startup
+    boolean isResynced;
+
     private Context mContext;
 
     Map<Integer, Object> messageMap;
@@ -116,9 +119,7 @@ public class Coordinator {
         }
         Collections.sort(NODE_LIST);
         Log.i(LOG_TAG, "NODE_LIST:");
-        for(Node node : NODE_LIST) {
-            Log.i(LOG_TAG, node.toString());
-        }
+        Utility.printNodeList(NODE_LIST);
 
         // initialize the Nodes map, used for id to node mapping
         Map<Integer, Node>  temp = new HashMap<Integer, Node>();
@@ -154,17 +155,69 @@ public class Coordinator {
         return instance;
     }
 
+    void resync() {
+        // send request to nodes which contain my data including others data i'm replicating
+        List<Node> relatedNodes = getRelatedNodes(Integer.toString(MY_ID));
+        List<Node> nodesIReplicate = getNodesIreplicate(Integer.toString(MY_ID));
+        Log.i(LOG_TAG, "Related Nodes:");
+        Utility.printNodeList(relatedNodes);
+        Log.i(LOG_TAG, "Replicated Nodes:");
+        Utility.printNodeList(nodesIReplicate);
+        // build sync request message
+        Message syncRequestMessage = new Message(MessageContract.Type.MSG_SYNC_REQUEST,
+                MessageContract.messageCounter++, MY_ID);
+        syncRequestMessage.coordinatorId = 0;
+        syncRequestMessage.content = Utility.nodeListToString(nodesIReplicate);
+        for (Node node : relatedNodes) {
+            mSender.sendMessage(Utility.convertMessageToJSON(syncRequestMessage),
+                    node.port);
+        }
+
+        // create a blocking queue to keep track of the responses
+        LinkedBlockingQueue<Message> responseQueue = new LinkedBlockingQueue<Message>();
+        messageMap.put(syncRequestMessage.id, responseQueue);
+
+        // poll till we receive all responses
+        List<Message> responses = new ArrayList<Message>();
+        for (int i = 0; i < relatedNodes.size(); i++) {
+            try {
+                responses.add(responseQueue.poll(
+                        MessageContract.RESPONSE_TIMEOUT, TimeUnit.MILLISECONDS));
+            } catch (InterruptedException e) {
+                Log.e(LOG_TAG, "INSERT: Interrupted " +
+                        "while waiting for response to: " + syncRequestMessage, e);
+            }
+        }
+        // remove the message from the messageMap
+        messageMap.remove(syncRequestMessage.id);
+
+        // reconcile the responses and insert into my CP
+        String messageToInsert = reconcileResponses(responses);
+        ContentValues [] cvsToInsert = Utility.convertResponseToCvArray(messageToInsert);
+        mContext.getContentResolver().bulkInsert(DatabaseContract.DynamoEntry.NODE_URI, cvsToInsert);
+
+        // update the re-sync flag
+        isResynced = true;
+    }
+
     void start(){
         Log.i(LOG_TAG, "Starting to process messages.");
         while(true){
             try {
                 final String message = receivedMessageQueue.take();
-                Thread handleMessageThread = new Thread(new Runnable() {
-                    public void run()
-                    {
-                        handleMessage(message);
-                    }});
-                handleMessageThread.start();
+                final Message messageObject = Utility.buildMessageObjectFromJson(message);
+                // if not re-synced handle only sync responses
+                if(!isResynced && messageObject.type != MessageContract.Type.MSG_SYNC_RESPONSE) {
+                    receivedMessageQueue.put(message);
+                }
+                else {
+                    Thread handleMessageThread = new Thread(new Runnable() {
+                        public void run() {
+                            handleMessage(messageObject);
+                        }
+                    });
+                    handleMessageThread.start();
+                }
             } catch (InterruptedException e) {
                 Log.e(LOG_TAG, "Exception: Message Consumer was interrupted.", e);
             }
@@ -219,11 +272,85 @@ public class Coordinator {
         return preferenceList;
     }
 
-    void handleMessage(String message) {
-        // this is a new message object
-        Message handledMessage = Utility.buildMessageObjectFromJson(message);
+    // return list of nodes which contain my data including others data i'm replicating
+    List<Node> getRelatedNodes(String node_id) {
+        List<Node> nodeList = new ArrayList<Node>();
+        Node coordinatingNode = findCoordinatingNode(node_id);
+        int i;
+        for(i = 0; i < NODE_LIST.size(); i++) {
+            if(NODE_LIST.get(i).equals(coordinatingNode))
+                break;
+        }
+        if(i == NODE_LIST.size())
+            throw new RuntimeException("FATAL ERROR: Node not present in NodeList. " +
+                    "This shouldn't happen.");
+        for(int j = i - DynamoContract.N + 1; j < i ; j++) {
+            nodeList.add(NODE_LIST.get(j%NODE_LIST.size()));
+        }
+        for(int j = i; j < i+ DynamoContract.N; j++) {
+            nodeList.add(NODE_LIST.get(j%NODE_LIST.size()));
+        }
+        return nodeList;
+    }
+
+    // return list of nodes whose data I contain
+    List<Node> getNodesIreplicate(String node_id) {
+        List<Node> nodeList = new ArrayList<Node>();
+        Node coordinatingNode = findCoordinatingNode(node_id);
+        int i;
+        for(i = 0; i < NODE_LIST.size(); i++) {
+            if(NODE_LIST.get(i).equals(coordinatingNode))
+                break;
+        }
+        if(i == NODE_LIST.size())
+            throw new RuntimeException("FATAL ERROR: Node not present in NodeList. " +
+                    "This shouldn't happen.");
+        for(int j = i - DynamoContract.N + 1; j <= i ; j++) {
+            nodeList.add(NODE_LIST.get(j%NODE_LIST.size()));
+        }
+        return nodeList;
+    }
+
+    void handleMessage(Message handledMessage) {
         Log.v(LOG_TAG, "Handling message: " +handledMessage);
         switch (handledMessage.type) {
+            case MessageContract.Type.MSG_SYNC_REQUEST: {
+                // query the CP for data relating to the requested nodes
+                String[] relatedNodesIds = Utility.stringToNodeIdList(handledMessage.content);
+                StringBuilder sb = new StringBuilder();
+                sb.append(DatabaseContract.DynamoEntry.COLUMN_OWNER_ID);
+                sb.append(" IN (");
+                for (int i = 0; i < relatedNodesIds.length - 1; i++) {
+                    sb.append("?, ");
+                }
+                sb.append("?)");
+                String selection = sb.toString();
+                Cursor reponseCursor = mContext.getContentResolver().query(DatabaseContract.DynamoEntry.NODE_URI,
+                        null,
+                        selection,
+                        relatedNodesIds,
+                        null);
+                // send a response
+                handledMessage.type = MessageContract.Type.MSG_SYNC_RESPONSE;
+                handledMessage.content = Utility.convertCursorToString(reponseCursor);
+                mSender.sendMessage(Utility.convertMessageToJSON(handledMessage),
+                        NODE_MAP.get(handledMessage.sourceId).port);
+                break;
+            }
+            case MessageContract.Type.MSG_SYNC_RESPONSE: {
+                // add the response to the response queue
+                LinkedBlockingQueue<Message> responseQueue = (LinkedBlockingQueue<Message>)
+                        messageMap.get(handledMessage.id);
+                try {
+                    if(responseQueue != null) {
+                        responseQueue.put(handledMessage);
+                    }
+                } catch (InterruptedException e) {
+                    Log.e(LOG_TAG, "SYNC: Interrupted " +
+                            "while adding response to queue." + handledMessage, e);
+                }
+                break;
+            }
             case MessageContract.Type.MSG_INSERT_INITIATE_REQUEST: {
                 String [] keyValueContext = getKeyValueContext(handledMessage.content);
                 // send insert commands to the preference list
@@ -236,7 +363,6 @@ public class Coordinator {
                     mSender.sendMessage(Utility.convertMessageToJSON(insertMessage),
                             node.port);
                 }
-
                 // create a blocking queue to keep track of the responses
                 LinkedBlockingQueue<Message> responseQueue = new LinkedBlockingQueue<Message>();
                 messageMap.put(insertMessage.id, responseQueue);
