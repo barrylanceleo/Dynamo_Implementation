@@ -85,7 +85,9 @@ public class SimpleDynamoProvider extends ContentProvider {
         String value = values.getAsString(DatabaseContract.DynamoEntry.COLUMN_VALUE);
         int owner_id = mCoordinator.findCoordinatingNode(key).id;
         values.put(DatabaseContract.DynamoEntry.COLUMN_OWNER_ID, owner_id);
-        Log.i(LOG_TAG, "INSERT: KEY: " + key + " VALUE: " + value + " OWNER: " + owner_id);
+        Log.i(LOG_TAG, "INSERT: KEY: " + key + " VALUE: " + value
+                +"\nHASH: " +Coordinator.genHash(key) +" OWNER: " + owner_id
+                +"\nURI: " +uri.toString());
         Uri returnUri;
         switch (sUriMatcher.match(uri)) {
             case NODE:
@@ -130,7 +132,7 @@ public class SimpleDynamoProvider extends ContentProvider {
             case DYNAMO:
                 // forward the request to the coordinator
                 Message initiateMessage = new Message(MessageContract.Type.MSG_INSERT_INITIATE_REQUEST,
-                        MessageContract.messageCounter++, mCoordinator.MY_ID);
+                        MessageContract.messageCounter.getAndIncrement(), mCoordinator.MY_ID);
                 initiateMessage.coordinatorId = 0;
                 initiateMessage.content = Utility.buildkeyValueContent(key, value, "");
                 // send and wait for response
@@ -228,7 +230,7 @@ public class SimpleDynamoProvider extends ContentProvider {
     @Override
     public Cursor query(Uri uri, String[] projection, String selection,
                         String[] selectionArgs, String sortOrder) {
-        Log.i(LOG_TAG, "QUERY: selection: " + selection);
+        Log.i(LOG_TAG, "QUERY: selection: " + selection +"\nURI: " +uri.toString());
         final SQLiteDatabase db;
         Cursor returnCursor;
         switch (sUriMatcher.match(uri)) {
@@ -245,32 +247,34 @@ public class SimpleDynamoProvider extends ContentProvider {
                 );
                 // Tells the Cursor what URI to watch, so it knows when its source data changes
                 returnCursor.setNotificationUri(getContext().getContentResolver(), uri);
-                Log.i(LOG_TAG, "Query Result: " +Utility.convertCursorToString(returnCursor));
+                Log.i(LOG_TAG, "Query Result: " +Utility.dumpCursor(returnCursor));
                 return returnCursor;
             case DYNAMO:
                 String key = selection;
                 if (selection.equals("*")) {
                     // forward the request to myself
                     Message initiateMessage = new Message(MessageContract.Type.MSG_QUERY_INITIATE_REQUEST,
-                            MessageContract.messageCounter++, mCoordinator.MY_ID);
+                            MessageContract.messageCounter.getAndIncrement(), mCoordinator.MY_ID);
                     initiateMessage.coordinatorId = 0;
                     initiateMessage.content = key;
                     // send and wait for response
                     Message response = sendAndWaitForResponse(initiateMessage, mCoordinator.getPreferenceList(key));
                     // convert response to cursor
                     returnCursor = Utility.convertResponseToCursor(response.content);
-                    Log.i(LOG_TAG, "Query Result: " +Utility.convertCursorToString(returnCursor));
+                    Log.i(LOG_TAG, "Query Result: " +Utility.dumpCursor(returnCursor));
                     return returnCursor;
                 } else if (selection.equals("@")) {
                     // just return all the entries in my node
-                    selection = null;
+                    projection = new String[] {DatabaseContract.DynamoEntry.COLUMN_KEY,
+                            DatabaseContract.DynamoEntry.COLUMN_VALUE};
+                    selection = DatabaseContract.DynamoEntry.COLUMN_VALUE +" IS NOT NULL ";
                     selectionArgs = null;
                     return query(DatabaseContract.DynamoEntry.NODE_URI,
                             projection, selection, selectionArgs, sortOrder);
                 } else {
                     // forward the request to the coordinator
                     Message initiateMessage = new Message(MessageContract.Type.MSG_QUERY_INITIATE_REQUEST,
-                            MessageContract.messageCounter++, mCoordinator.MY_ID);
+                            MessageContract.messageCounter.getAndIncrement(), mCoordinator.MY_ID);
                     initiateMessage.coordinatorId = 0;
                     initiateMessage.content = key;
                     // send and wait for response
@@ -278,7 +282,7 @@ public class SimpleDynamoProvider extends ContentProvider {
                             initiateMessage, mCoordinator.getPreferenceList(key));
                     // convert response to cursor
                     returnCursor = Utility.convertResponseToCursor(response.content);
-                    Log.i(LOG_TAG, "Query Result: " +Utility.convertCursorToString(returnCursor));
+                    Log.i(LOG_TAG, "Query Result: " +Utility.dumpCursor(returnCursor));
                     return returnCursor;
                 }
             default:
@@ -288,7 +292,7 @@ public class SimpleDynamoProvider extends ContentProvider {
 
     @Override
     public int delete(Uri uri, String selection, String[] selectionArgs) {
-        Log.v(LOG_TAG, "DELETE: selection: " + selection);
+        Log.i(LOG_TAG, "DELETE: selection: " + selection +"\nURI: " +uri.toString());
         String key = selection;
         switch (sUriMatcher.match(uri)) {
             case NODE:
@@ -307,7 +311,7 @@ public class SimpleDynamoProvider extends ContentProvider {
                 if (selection.equals("*")) {
                     // forward the request to myself
                     Message initiateMessage = new Message(MessageContract.Type.MSG_DELETE_INITIATE_REQUEST,
-                            MessageContract.messageCounter++, mCoordinator.MY_ID);
+                            MessageContract.messageCounter.getAndIncrement(), mCoordinator.MY_ID);
                     initiateMessage.coordinatorId = 0;
                     initiateMessage.content = key;
                     // send and wait for response
@@ -324,9 +328,9 @@ public class SimpleDynamoProvider extends ContentProvider {
                 } else {
                     // forward the request to the coordinator
                     Message initiateMessage = new Message(MessageContract.Type.MSG_DELETE_INITIATE_REQUEST,
-                            MessageContract.messageCounter++, mCoordinator.MY_ID);
+                            MessageContract.messageCounter.getAndIncrement(), mCoordinator.MY_ID);
                     initiateMessage.coordinatorId = 0;
-                    initiateMessage.content = Utility.buildkeyValueContent(key, null, null);
+                    initiateMessage.content = key;
                     // send and wait for response
                     Message response = sendAndWaitForResponse(
                             initiateMessage, mCoordinator.getPreferenceList(key));

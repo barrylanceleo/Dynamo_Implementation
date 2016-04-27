@@ -167,7 +167,7 @@ public class Coordinator {
         Utility.printNodeList(nodesIReplicate);
         // build sync request message
         Message syncRequestMessage = new Message(MessageContract.Type.MSG_SYNC_REQUEST,
-                MessageContract.messageCounter++, MY_ID);
+                MessageContract.messageCounter.getAndIncrement(), MY_ID);
         syncRequestMessage.coordinatorId = 0;
         syncRequestMessage.content = Utility.nodeListToString(nodesIReplicate);
         for (Node node : relatedNodes) {
@@ -231,7 +231,7 @@ public class Coordinator {
         }
     }
 
-    private static String genHash(String input)  {
+    public static String genHash(String input)  {
         MessageDigest sha1 = null;
         try {
             sha1 = MessageDigest.getInstance("SHA-1");
@@ -373,7 +373,7 @@ public class Coordinator {
                 List<Node> preferenceList = getPreferenceList(keyValueContext[0]);
                 Message insertMessage = new Message(handledMessage);
                 insertMessage.type = MessageContract.Type.MSG_INSERT_REQUEST;
-                insertMessage.id = MessageContract.messageCounter++;
+                insertMessage.id = MessageContract.messageCounter.getAndIncrement();
                 insertMessage.coordinatorId = MY_ID;
                 for (Node node : preferenceList) {
                     Log.i(LOG_TAG, "Sent MSG_INSERT_REQUEST to : "+node.id +"\n" +insertMessage);
@@ -465,7 +465,7 @@ public class Coordinator {
                     // send "@" queries to all nodes
                     Message queryMessage = new Message(handledMessage);
                     queryMessage.type = MessageContract.Type.MSG_QUERY_REQUEST;
-                    queryMessage.id = MessageContract.messageCounter++;
+                    queryMessage.id = MessageContract.messageCounter.getAndIncrement();
                     queryMessage.coordinatorId = MY_ID;
                     for (Node node : NODE_LIST) {
                         Log.i(LOG_TAG, "Sent MSG_QUERY_REQUEST to : "+node.id +"\n" +queryMessage);
@@ -509,7 +509,7 @@ public class Coordinator {
                     List<Node> preferenceList = getPreferenceList(key);
                     Message queryMessage = new Message(handledMessage);
                     queryMessage.type = MessageContract.Type.MSG_QUERY_REQUEST;
-                    queryMessage.id = MessageContract.messageCounter++;
+                    queryMessage.id = MessageContract.messageCounter.getAndIncrement();
                     queryMessage.coordinatorId = MY_ID;
                     for (Node node : preferenceList) {
                         Log.i(LOG_TAG, "Sent MSG_QUERY_REQUEST to : "+node.port +"\n" +queryMessage);
@@ -611,7 +611,7 @@ public class Coordinator {
                     // send "@" delete cmds to all nodes
                     Message deleteMessage = new Message(handledMessage);
                     deleteMessage.type = MessageContract.Type.MSG_DELETE_REQUEST;
-                    deleteMessage.id = MessageContract.messageCounter++;
+                    deleteMessage.id = MessageContract.messageCounter.getAndIncrement();
                     deleteMessage.coordinatorId = MY_ID;
                     for (Node node : NODE_LIST) {
                         Log.i(LOG_TAG, "Sent MSG_DELETE_REQUEST to : "+ node.port +"\n" +deleteMessage);
@@ -659,7 +659,7 @@ public class Coordinator {
                     List<Node> preferenceList = getPreferenceList(key);
                     Message deleteMessage = new Message(handledMessage);
                     deleteMessage.type = MessageContract.Type.MSG_DELETE_REQUEST;
-                    deleteMessage.id = MessageContract.messageCounter++;
+                    deleteMessage.id = MessageContract.messageCounter.getAndIncrement();
                     deleteMessage.coordinatorId = MY_ID;
                     for (Node node : preferenceList) {
                         Log.i(LOG_TAG, "Sent MSG_DELETE_REQUEST to : " +node.port +"\n" +deleteMessage);
@@ -695,8 +695,14 @@ public class Coordinator {
                         Log.e(LOG_TAG, "DELETE: Received only  " + responses.size() + "responses" +
                                 " for message: " + deleteMessage);
                     } else {
+                        // get the max rows deleted, should be one
+                        int deletedCount = 0;
+                        for(Message response : responses) {
+                            deletedCount = Math.max(deletedCount, Integer.parseInt(response.content));
+                        }
                         handledMessage.type = MessageContract.Type.MSG_DELETE_INITIATE_RESPONSE;
                         handledMessage.coordinatorId = MY_ID;
+                        handledMessage.content = Integer.toString(deletedCount);
                         Log.i(LOG_TAG, "Sent MSG_DELETE_INITIATE_RESPONSE to : " +handledMessage.sourceId +"\n" +handledMessage);
                         mSender.sendMessage(Utility.convertMessageToJSON(handledMessage),
                                 NODE_MAP.get(handledMessage.sourceId).port);

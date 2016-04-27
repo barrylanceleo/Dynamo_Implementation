@@ -2,6 +2,7 @@ package edu.buffalo.cse.cse486586.simpledynamo;
 
 import android.content.ContentValues;
 import android.database.Cursor;
+import android.database.DatabaseUtils;
 import android.database.MatrixCursor;
 import android.util.JsonWriter;
 import android.util.Log;
@@ -76,17 +77,23 @@ public class Utility {
         }
     }
 
+    // does not include the deleted keys in the returned cursor
     public static Cursor convertResponseToCursor(String queryResponse){
+//        MatrixCursor cursor = new MatrixCursor(new String[]{DatabaseContract.DynamoEntry.COLUMN_KEY,
+//                DatabaseContract.DynamoEntry.COLUMN_VALUE, DatabaseContract.DynamoEntry.COLUMN_CONTEXT});
         MatrixCursor cursor = new MatrixCursor(new String[]{DatabaseContract.DynamoEntry.COLUMN_KEY,
-                DatabaseContract.DynamoEntry.COLUMN_VALUE, DatabaseContract.DynamoEntry.COLUMN_CONTEXT});
+                DatabaseContract.DynamoEntry.COLUMN_VALUE});
         try {
             JSONArray messageJSON = new JSONArray(queryResponse);
             for(int i = 0; i < messageJSON.length(); i++){
                 JSONObject jObject = messageJSON.getJSONObject(i);
                 String key = jObject.getString(MessageContract.Field.MSG_CONTENT_KEY);
                 String value = jObject.getString(MessageContract.Field.MSG_CONTENT_VALUE);
-                String context = jObject.getString(MessageContract.Field.MSG_CONTENT_CONTEXT);
-                cursor.addRow(new String[]{key, value, context});
+//                String context = jObject.getString(MessageContract.Field.MSG_CONTENT_CONTEXT);
+                if(value != null) {
+//                    cursor.addRow(new String[]{key, value, context});
+                    cursor.addRow(new String[]{key, value});
+                }
             }
         } catch (JSONException e) {
             Log.e(LOG_TAG, "Exception: Improper Message Format.", e);
@@ -143,6 +150,18 @@ public class Utility {
             Log.e(LOG_TAG, "Exception: IO Exception in JsonWriter.", e);
         }
         return sWriter.toString();
+    }
+
+    public static String dumpCursor(Cursor cursor) {
+        cursor.moveToFirst();
+        StringBuilder sb = new StringBuilder();
+        while(!cursor.isAfterLast())
+        {
+            DatabaseUtils.dumpCurrentRow(cursor, sb);
+            cursor.moveToNext();
+        }
+        cursor.moveToFirst();
+        return sb.toString();
     }
 
     public static String nodeListToString(List<Coordinator.Node> nodes) {

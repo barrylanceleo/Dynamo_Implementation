@@ -1,10 +1,12 @@
 package edu.buffalo.cse.cse486586.simpledynamo;
 
+import java.util.concurrent.atomic.AtomicInteger;
+
 public class MessageContract {
 
     public static final int LONG_TIMEOUT = 20000;
     public static final int SHORT_TIMEOUT = 500;
-    public static int messageCounter = 0;
+    public static AtomicInteger messageCounter = new AtomicInteger(0);
 
     public static class Type {
         // types for insert operation
