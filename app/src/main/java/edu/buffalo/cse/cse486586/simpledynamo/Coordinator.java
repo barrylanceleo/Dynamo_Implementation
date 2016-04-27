@@ -1,6 +1,7 @@
 package edu.buffalo.cse.cse486586.simpledynamo;
 
 
+import android.content.ContentProvider;
 import android.content.ContentValues;
 import android.content.Context;
 import android.database.Cursor;
@@ -155,7 +156,8 @@ public class Coordinator {
         return instance;
     }
 
-    void resync() {
+    void resync(ContentProvider cp) {
+        Log.i(LOG_TAG, "Starting Re-sync.");
         // send request to nodes which contain my data including others data i'm replicating
         List<Node> relatedNodes = getRelatedNodes(Integer.toString(MY_ID));
         List<Node> nodesIReplicate = getNodesIreplicate(Integer.toString(MY_ID));
@@ -181,10 +183,13 @@ public class Coordinator {
         List<Message> responses = new ArrayList<Message>();
         for (int i = 0; i < relatedNodes.size(); i++) {
             try {
-                responses.add(responseQueue.poll(
-                        MessageContract.RESPONSE_TIMEOUT, TimeUnit.MILLISECONDS));
+                Message response  = responseQueue.poll(
+                        MessageContract.SHORT_TIMEOUT, TimeUnit.MILLISECONDS);
+                if(response != null) {
+                    responses.add(response);
+                }
             } catch (InterruptedException e) {
-                Log.e(LOG_TAG, "INSERT: Interrupted " +
+                Log.e(LOG_TAG, "RE_SYNC: Interrupted " +
                         "while waiting for response to: " + syncRequestMessage, e);
             }
         }
@@ -193,11 +198,14 @@ public class Coordinator {
 
         // reconcile the responses and insert into my CP
         String messageToInsert = reconcileResponses(responses);
+        Log.i(LOG_TAG, "RE_SYNC: Inserting: " +messageToInsert);
         ContentValues [] cvsToInsert = Utility.convertResponseToCvArray(messageToInsert);
-        mContext.getContentResolver().bulkInsert(DatabaseContract.DynamoEntry.NODE_URI, cvsToInsert);
+        cp.bulkInsert(DatabaseContract.DynamoEntry.NODE_URI, cvsToInsert);
 
         // update the re-sync flag
         isResynced = true;
+        Log.i(LOG_TAG, "Re-sync Complete.");
+
     }
 
     void start(){
@@ -205,15 +213,14 @@ public class Coordinator {
         while(true){
             try {
                 final String message = receivedMessageQueue.take();
-                final Message messageObject = Utility.buildMessageObjectFromJson(message);
                 // if not re-synced handle only sync responses
-                if(!isResynced && messageObject.type != MessageContract.Type.MSG_SYNC_RESPONSE) {
+                if(!isResynced && Utility.getTypeFromMessageJson(message) != MessageContract.Type.MSG_SYNC_RESPONSE) {
                     receivedMessageQueue.put(message);
                 }
                 else {
                     Thread handleMessageThread = new Thread(new Runnable() {
                         public void run() {
-                            handleMessage(messageObject);
+                            handleMessage(Utility.buildMessageObjectFromJson(message));
                         }
                     });
                     handleMessageThread.start();
@@ -285,9 +292,13 @@ public class Coordinator {
             throw new RuntimeException("FATAL ERROR: Node not present in NodeList. " +
                     "This shouldn't happen.");
         for(int j = i - DynamoContract.N + 1; j < i ; j++) {
-            nodeList.add(NODE_LIST.get(j%NODE_LIST.size()));
+            Log.i(LOG_TAG, "Index: " +j +" Mod value: "
+                    +(j%NODE_LIST.size()>=0?j%NODE_LIST.size():NODE_LIST.size()+(j%NODE_LIST.size())));
+            int id = j%NODE_LIST.size()>=0?j%NODE_LIST.size():NODE_LIST.size()+(j%NODE_LIST.size());
+            nodeList.add(NODE_LIST.get(id));
         }
         for(int j = i; j < i+ DynamoContract.N; j++) {
+            Log.i(LOG_TAG, "Index: " +j +" Mod value: " +j%NODE_LIST.size());
             nodeList.add(NODE_LIST.get(j%NODE_LIST.size()));
         }
         return nodeList;
@@ -305,8 +316,12 @@ public class Coordinator {
         if(i == NODE_LIST.size())
             throw new RuntimeException("FATAL ERROR: Node not present in NodeList. " +
                     "This shouldn't happen.");
+
         for(int j = i - DynamoContract.N + 1; j <= i ; j++) {
-            nodeList.add(NODE_LIST.get(j%NODE_LIST.size()));
+            Log.i(LOG_TAG, "Index: " +j +" Mod value: "
+                    +(j%NODE_LIST.size()>=0?j%NODE_LIST.size():NODE_LIST.size()+(j%NODE_LIST.size())));
+            int id = j%NODE_LIST.size()>=0?j%NODE_LIST.size():NODE_LIST.size()+(j%NODE_LIST.size());
+            nodeList.add(NODE_LIST.get(id));
         }
         return nodeList;
     }
@@ -333,6 +348,7 @@ public class Coordinator {
                 // send a response
                 handledMessage.type = MessageContract.Type.MSG_SYNC_RESPONSE;
                 handledMessage.content = Utility.convertCursorToString(reponseCursor);
+                reponseCursor.close();
                 mSender.sendMessage(Utility.convertMessageToJSON(handledMessage),
                         NODE_MAP.get(handledMessage.sourceId).port);
                 break;
@@ -360,6 +376,7 @@ public class Coordinator {
                 insertMessage.id = MessageContract.messageCounter++;
                 insertMessage.coordinatorId = MY_ID;
                 for (Node node : preferenceList) {
+                    Log.i(LOG_TAG, "Sent MSG_INSERT_REQUEST to : "+node.id +"\n" +insertMessage);
                     mSender.sendMessage(Utility.convertMessageToJSON(insertMessage),
                             node.port);
                 }
@@ -371,8 +388,13 @@ public class Coordinator {
                 List<Message> responses = new ArrayList<Message>();
                 for (int i = 0; i < DynamoContract.W; i++) {
                     try {
-                        responses.add(responseQueue.poll(
-                                MessageContract.RESPONSE_TIMEOUT, TimeUnit.MILLISECONDS));
+                        Message response = responseQueue.poll(MessageContract.LONG_TIMEOUT, TimeUnit.MILLISECONDS);
+                        if(response!= null) {
+                            responses.add(response);
+                        }
+                        else {
+                            Log.e(LOG_TAG, "Time-out while waiting for response to :" +insertMessage);
+                        }
                     } catch (InterruptedException e) {
                         Log.e(LOG_TAG, "INSERT: Interrupted " +
                                 "while waiting for response to: " + insertMessage, e);
@@ -388,6 +410,8 @@ public class Coordinator {
                 } else {
                     handledMessage.type = MessageContract.Type.MSG_INSERT_INITIATE_RESPONSE;
                     handledMessage.coordinatorId = MY_ID;
+                    Log.i(LOG_TAG, "Sent MSG_INSERT_INITIATE_RESPONSE to : "
+                            +NODE_MAP.get(handledMessage.sourceId).id +"\n" +handledMessage);
                     mSender.sendMessage(Utility.convertMessageToJSON(handledMessage),
                             NODE_MAP.get(handledMessage.sourceId).port);
                 }
@@ -399,7 +423,7 @@ public class Coordinator {
                 if(sentMessage != null) {
                     messageMap.put(handledMessage.id, handledMessage);
                     synchronized (sentMessage) {
-                        notify();
+                        sentMessage.notify();
                     }
                 }
             }
@@ -415,8 +439,10 @@ public class Coordinator {
 
                 // send a response to the coordinator
                 handledMessage.type = MessageContract.Type.MSG_INSERT_RESPONSE;
+                Log.i(LOG_TAG, "Sent MSG_INSERT_RESPONSE to : " +handledMessage.coordinatorId +"\n" +handledMessage);
+
                 mSender.sendMessage(Utility.convertMessageToJSON(handledMessage),
-                        handledMessage.coordinatorId);
+                        NODE_MAP.get(handledMessage.coordinatorId).port);
             }
             break;
             case MessageContract.Type.MSG_INSERT_RESPONSE: {
@@ -442,6 +468,7 @@ public class Coordinator {
                     queryMessage.id = MessageContract.messageCounter++;
                     queryMessage.coordinatorId = MY_ID;
                     for (Node node : NODE_LIST) {
+                        Log.i(LOG_TAG, "Sent MSG_QUERY_REQUEST to : "+node.id +"\n" +queryMessage);
                         mSender.sendMessage(Utility.convertMessageToJSON(queryMessage),
                                 node.port);
                     }
@@ -454,8 +481,13 @@ public class Coordinator {
                     List<Message> responses = new ArrayList<Message>();
                     for (int i = 0; i < NODE_LIST.size(); i++) {
                         try {
-                            responses.add(responseQueue.poll(
-                                    MessageContract.RESPONSE_TIMEOUT, TimeUnit.MILLISECONDS));
+                            Message response = responseQueue.poll(MessageContract.LONG_TIMEOUT, TimeUnit.MILLISECONDS);
+                            if(response!= null) {
+                                responses.add(response);
+                            }
+                            else {
+                                Log.e(LOG_TAG, "Time-out while waiting for response to :" +queryMessage);
+                            }
                         } catch (InterruptedException e) {
                             Log.e(LOG_TAG, "INSERT: Interrupted " +
                                     "while waiting for response to: " + queryMessage, e);
@@ -468,6 +500,7 @@ public class Coordinator {
                     handledMessage.type = MessageContract.Type.MSG_QUERY_INITIATE_RESPONSE;
                     handledMessage.coordinatorId = MY_ID;
                     handledMessage.content = reconcileResponses(responses);
+                    Log.i(LOG_TAG, "Sent MSG_QUERY_INITIATE_RESPONSE to : "+handledMessage.sourceId +"\n" +handledMessage);
                     mSender.sendMessage(Utility.convertMessageToJSON(handledMessage),
                             NODE_MAP.get(handledMessage.sourceId).port);
                 }
@@ -479,6 +512,7 @@ public class Coordinator {
                     queryMessage.id = MessageContract.messageCounter++;
                     queryMessage.coordinatorId = MY_ID;
                     for (Node node : preferenceList) {
+                        Log.i(LOG_TAG, "Sent MSG_QUERY_REQUEST to : "+node.port +"\n" +queryMessage);
                         mSender.sendMessage(Utility.convertMessageToJSON(queryMessage),
                                 node.port);
                     }
@@ -491,8 +525,13 @@ public class Coordinator {
                     List<Message> responses = new ArrayList<Message>();
                     for (int i = 0; i < DynamoContract.R; i++) {
                         try {
-                            responses.add(responseQueue.poll(
-                                    MessageContract.RESPONSE_TIMEOUT, TimeUnit.MILLISECONDS));
+                            Message response = responseQueue.poll(MessageContract.LONG_TIMEOUT, TimeUnit.MILLISECONDS);
+                            if(response!= null) {
+                                responses.add(response);
+                            }
+                            else {
+                                Log.e(LOG_TAG, "Time-out while waiting for response to :" +queryMessage);
+                            }
                         } catch (InterruptedException e) {
                             Log.e(LOG_TAG, "INSERT: Interrupted " +
                                     "while waiting for response to: " + queryMessage, e);
@@ -509,6 +548,7 @@ public class Coordinator {
                         handledMessage.type = MessageContract.Type.MSG_QUERY_INITIATE_RESPONSE;
                         handledMessage.coordinatorId = MY_ID;
                         handledMessage.content = reconcileResponses(responses);
+                        Log.i(LOG_TAG, "Sent MSG_QUERY_INITIATE_RESPONSE to : "+handledMessage.sourceId +"\n" +handledMessage);
                         mSender.sendMessage(Utility.convertMessageToJSON(handledMessage),
                                 NODE_MAP.get(handledMessage.sourceId).port);
                     }
@@ -521,7 +561,7 @@ public class Coordinator {
                 if(sentMessage != null) {
                     messageMap.put(handledMessage.id, handledMessage);
                     synchronized (sentMessage) {
-                        notify();
+                        sentMessage.notify();
                     }
                 }
             }
@@ -540,13 +580,15 @@ public class Coordinator {
                     selectionArgs = new String[] {handledMessage.content};
                 }
                 // query my content provider
-                Cursor result = mContext.getContentResolver().query(DatabaseContract.DynamoEntry.NODE_URI,
+                Cursor responseCursor = mContext.getContentResolver().query(DatabaseContract.DynamoEntry.NODE_URI,
                         null, selection, selectionArgs, null);
                 // send a response to the coordinator
                 handledMessage.type = MessageContract.Type.MSG_QUERY_RESPONSE;
-                handledMessage.content = Utility.convertCursorToString(result);
+                handledMessage.content = Utility.convertCursorToString(responseCursor);
+                responseCursor.close();
+                Log.i(LOG_TAG, "Sent MSG_QUERY_RESPONSE to : "+handledMessage.coordinatorId +"\n" +handledMessage);
                 mSender.sendMessage(Utility.convertMessageToJSON(handledMessage),
-                        handledMessage.coordinatorId);
+                        NODE_MAP.get(handledMessage.coordinatorId).port);
             }
             break;
             case MessageContract.Type.MSG_QUERY_RESPONSE: {
@@ -572,6 +614,7 @@ public class Coordinator {
                     deleteMessage.id = MessageContract.messageCounter++;
                     deleteMessage.coordinatorId = MY_ID;
                     for (Node node : NODE_LIST) {
+                        Log.i(LOG_TAG, "Sent MSG_DELETE_REQUEST to : "+ node.port +"\n" +deleteMessage);
                         mSender.sendMessage(Utility.convertMessageToJSON(deleteMessage),
                                 node.port);
                     }
@@ -584,8 +627,13 @@ public class Coordinator {
                     List<Message> responses = new ArrayList<Message>();
                     for (int i = 0; i < NODE_LIST.size(); i++) {
                         try {
-                            responses.add(responseQueue.poll(
-                                    MessageContract.RESPONSE_TIMEOUT, TimeUnit.MILLISECONDS));
+                            Message response = responseQueue.poll(MessageContract.LONG_TIMEOUT, TimeUnit.MILLISECONDS);
+                            if(response!= null) {
+                                responses.add(response);
+                            }
+                            else {
+                                Log.e(LOG_TAG, "Time-out while waiting for response to :" +deleteMessage);
+                            }
                         } catch (InterruptedException e) {
                             Log.e(LOG_TAG, "INSERT: Interrupted " +
                                     "while waiting for response to: " + deleteMessage, e);
@@ -594,7 +642,7 @@ public class Coordinator {
                     // remove the message from the messageMap
                     messageMap.remove(deleteMessage.id);
 
-                    // count the total number of entreies deleted and send a response to the source
+                    // count the total number of entries deleted and send a response to the source
                     int deletedCount = 0;
                     for(Message response : responses) {
                         deletedCount += Integer.parseInt(response.content);
@@ -602,6 +650,7 @@ public class Coordinator {
                     handledMessage.type = MessageContract.Type.MSG_DELETE_INITIATE_RESPONSE;
                     handledMessage.coordinatorId = MY_ID;
                     handledMessage.content = Integer.toString(deletedCount);
+                    Log.i(LOG_TAG, "Sent MSG_DELETE_INITIATE_RESPONSE to : " +handledMessage.sourceId +"\n" +handledMessage);
                     mSender.sendMessage(Utility.convertMessageToJSON(handledMessage),
                             NODE_MAP.get(handledMessage.sourceId).port);
                 }
@@ -613,6 +662,7 @@ public class Coordinator {
                     deleteMessage.id = MessageContract.messageCounter++;
                     deleteMessage.coordinatorId = MY_ID;
                     for (Node node : preferenceList) {
+                        Log.i(LOG_TAG, "Sent MSG_DELETE_REQUEST to : " +node.port +"\n" +deleteMessage);
                         mSender.sendMessage(Utility.convertMessageToJSON(deleteMessage),
                                 node.port);
                     }
@@ -625,8 +675,13 @@ public class Coordinator {
                     List<Message> responses = new ArrayList<Message>();
                     for (int i = 0; i < DynamoContract.W; i++) {
                         try {
-                            responses.add(responseQueue.poll(
-                                    MessageContract.RESPONSE_TIMEOUT, TimeUnit.MILLISECONDS));
+                            Message response = responseQueue.poll(MessageContract.LONG_TIMEOUT, TimeUnit.MILLISECONDS);
+                            if(response!= null) {
+                                responses.add(response);
+                            }
+                            else {
+                                Log.e(LOG_TAG, "Time-out while waiting for response to :" +deleteMessage);
+                            }
                         } catch (InterruptedException e) {
                             Log.e(LOG_TAG, "DELETE: Interrupted " +
                                     "while waiting for response to: " + deleteMessage, e);
@@ -642,6 +697,7 @@ public class Coordinator {
                     } else {
                         handledMessage.type = MessageContract.Type.MSG_DELETE_INITIATE_RESPONSE;
                         handledMessage.coordinatorId = MY_ID;
+                        Log.i(LOG_TAG, "Sent MSG_DELETE_INITIATE_RESPONSE to : " +handledMessage.sourceId +"\n" +handledMessage);
                         mSender.sendMessage(Utility.convertMessageToJSON(handledMessage),
                                 NODE_MAP.get(handledMessage.sourceId).port);
                     }
@@ -654,7 +710,7 @@ public class Coordinator {
                 if(sentMessage != null) {
                     messageMap.put(handledMessage.id, handledMessage);
                     synchronized (sentMessage) {
-                        notify();
+                        sentMessage.notify();
                     }
                 }
             }
@@ -678,8 +734,9 @@ public class Coordinator {
                 // send a response to the coordinator
                 handledMessage.type = MessageContract.Type.MSG_DELETE_RESPONSE;
                 handledMessage.content = Integer.toString(deletedCount);
+                Log.i(LOG_TAG, "Sent MSG_DELETE_RESPONSE to : " +handledMessage.coordinatorId +"\n" +handledMessage);
                 mSender.sendMessage(Utility.convertMessageToJSON(handledMessage),
-                        handledMessage.coordinatorId);
+                        NODE_MAP.get(handledMessage.coordinatorId).port);
             }
             break;
             case MessageContract.Type.MSG_DELETE_RESPONSE: {
@@ -715,6 +772,7 @@ public class Coordinator {
     }
 
     String reconcileResponses(List<Message> responses) {
+        Log.i(LOG_TAG, "Reconciling " +responses.size() +" responses.");
         HashMap<String, JSONObject> keyMap = new HashMap<String, JSONObject>();
         for(Message response : responses) {
             try {

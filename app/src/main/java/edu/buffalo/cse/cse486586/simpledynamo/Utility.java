@@ -63,6 +63,19 @@ public class Utility {
         return message;
     }
 
+    public static int getTypeFromMessageJson(String messageString) {
+        try {
+            JSONObject messageJSON = new JSONObject(messageString);
+            return messageJSON.getInt(MessageContract.Field.MSG_FIELD_TYPE);
+        } catch (JSONException e) {
+            Log.e(LOG_TAG, "Exception: Improper Message Format.");
+            return 0;
+        } catch (NumberFormatException e) {
+            Log.e(LOG_TAG, "Exception: Improper Message Format.");
+            return 0;
+        }
+    }
+
     public static Cursor convertResponseToCursor(String queryResponse){
         MatrixCursor cursor = new MatrixCursor(new String[]{DatabaseContract.DynamoEntry.COLUMN_KEY,
                 DatabaseContract.DynamoEntry.COLUMN_VALUE, DatabaseContract.DynamoEntry.COLUMN_CONTEXT});

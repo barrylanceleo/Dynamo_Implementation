@@ -13,57 +13,60 @@ import java.util.List;
 
 public class SimpleDynamoProvider extends ContentProvider {
 
-	private static final String LOG_TAG = SimpleDynamoProvider.class.getSimpleName();
+    private static final String LOG_TAG = SimpleDynamoProvider.class.getSimpleName();
 
-	// The URI Matcher used by this content provider.
-	private static final UriMatcher sUriMatcher = buildUriMatcher();
+    // The URI Matcher used by this content provider.
+    private static final UriMatcher sUriMatcher = buildUriMatcher();
 
-	private static DynamoDbHelper mDynamoDbHelper;
-	// URI types
-	static final int DYNAMO = 100;
-	static final int NODE = 200;
+    private static DynamoDbHelper mDynamoDbHelper;
+    // URI types
+    static final int DYNAMO = 100;
+    static final int NODE = 200;
     static final int BLIND = 300;
 
 
     private static Coordinator mCoordinator;
-	private static Thread backgroundThread;
+    private static Thread backgroundThread;
 
-	static UriMatcher buildUriMatcher() {
-		final UriMatcher matcher = new UriMatcher(UriMatcher.NO_MATCH);
-		final String authority = DatabaseContract.CONTENT_AUTHORITY;
+    static UriMatcher buildUriMatcher() {
+        final UriMatcher matcher = new UriMatcher(UriMatcher.NO_MATCH);
+        final String authority = DatabaseContract.CONTENT_AUTHORITY;
 
-		// For each type of URI you want to add, create a corresponding code.
-		matcher.addURI(authority, null, DYNAMO);
-		matcher.addURI(authority, DatabaseContract.PATH_NODE, NODE);
-        matcher.addURI(authority, DatabaseContract.PATH_NODE, BLIND);
+        // For each type of URI you want to add, create a corresponding code.
+        matcher.addURI(authority, null, DYNAMO);
+        matcher.addURI(authority, DatabaseContract.PATH_NODE, NODE);
+        matcher.addURI(authority, DatabaseContract.PATH_BLIND, BLIND);
 
         return matcher;
-	}
+    }
 
-	@Override
-	public boolean onCreate() {
-		Log.i(LOG_TAG, "Creating the Content Provider.");
+    @Override
+    public boolean onCreate() {
+        Log.i(LOG_TAG, "Creating the Content Provider.");
         // Create a Database helper
         mDynamoDbHelper = new DynamoDbHelper(getContext());
         // create the coordinator
-        mCoordinator = Coordinator.getInstance(getContext());
-        // start handling requests in a background thread,
-        // this will process only re-sync responses until re-sync is completed
-        mCoordinator.isResynced = false;
-        backgroundThread = new Thread(new Runnable() {
-            public void run()
-            {
-                mCoordinator.start();
-            }});
-        backgroundThread.start();
-        // re-sync
-        mCoordinator.resync();
+        if (mCoordinator == null) {
+            Log.i(LOG_TAG, "Creating Coordinator.");
+            mCoordinator = Coordinator.getInstance(getContext());
+            mCoordinator.isResynced = false;
+            // start handling requests in a background thread,
+            // this will process only re-sync responses until re-sync is completed
+            backgroundThread = new Thread(new Runnable() {
+                public void run() {
+                    mCoordinator.start();
+                }
+            });
+            backgroundThread.start();
+            // re-sync
+            mCoordinator.resync(this);
+        }
         Log.i(LOG_TAG, "Node started and re-synced.");
-		return true;
-	}
+        return true;
+    }
 
-	@Override
-	public String getType(Uri uri) {
+    @Override
+    public String getType(Uri uri) {
         // Use the Uri Matcher to determine what kind of URI this is.
         switch (sUriMatcher.match(uri)) {
             case DYNAMO:
@@ -73,81 +76,84 @@ public class SimpleDynamoProvider extends ContentProvider {
             default:
                 throw new UnsupportedOperationException("Unknown uri: " + uri);
         }
-	}
+    }
 
-	@Override
-	public Uri insert(Uri uri, ContentValues values) {
-		final SQLiteDatabase db = mDynamoDbHelper.getWritableDatabase();
+    @Override
+    public Uri insert(Uri uri, ContentValues values) {
+        final SQLiteDatabase db;
         String key = values.getAsString(DatabaseContract.DynamoEntry.COLUMN_KEY);
         String value = values.getAsString(DatabaseContract.DynamoEntry.COLUMN_VALUE);
-		int owner_id = mCoordinator.findCoordinatingNode(key).id;
-		values.put(DatabaseContract.DynamoEntry.COLUMN_OWNER_ID, owner_id);
-        Log.v(LOG_TAG, "INSERT: KEY: " + key + " VALUE: " + value +" OWNER: " +owner_id);
-		Uri returnUri;
-		switch (sUriMatcher.match(uri)) {
-			case NODE:
-				// insert into this node
-				db.beginTransaction();
-				Cursor oldValue = db.query(
-						DatabaseContract.DynamoEntry.TABLE_NAME,
-						null,
-						"key=?",
-						new String[]{key},
-						null,
-						null,
-						null
-				);
-				// if key not present already insert context = 1, else ++context
-				if(oldValue.getCount() == 0) {
-					values.put(DatabaseContract.DynamoEntry.COLUMN_CONTEXT,
-							Integer.toString(1));
-				}
-				else {
-					oldValue.moveToFirst();
-					String oldContext = oldValue.getString(oldValue.getColumnIndex(
-							DatabaseContract.DynamoEntry.COLUMN_CONTEXT));
-					values.put(DatabaseContract.DynamoEntry.COLUMN_CONTEXT,
-							Integer.toString(Integer.parseInt(oldContext)+1));
-				}
+        int owner_id = mCoordinator.findCoordinatingNode(key).id;
+        values.put(DatabaseContract.DynamoEntry.COLUMN_OWNER_ID, owner_id);
+        Log.i(LOG_TAG, "INSERT: KEY: " + key + " VALUE: " + value + " OWNER: " + owner_id);
+        Uri returnUri;
+        switch (sUriMatcher.match(uri)) {
+            case NODE:
+                // insert into this node
+                db = mDynamoDbHelper.getWritableDatabase();
+                db.beginTransaction();
+                Cursor oldValue = db.query(
+                        DatabaseContract.DynamoEntry.TABLE_NAME,
+                        null,
+                        "key=?",
+                        new String[]{key},
+                        null,
+                        null,
+                        null
+                );
+                // if key not present already insert context = 1, else ++context
+                if (oldValue.getCount() == 0) {
+                    values.put(DatabaseContract.DynamoEntry.COLUMN_CONTEXT,
+                            Integer.toString(1));
+                } else {
+                    oldValue.moveToFirst();
+                    String oldContext = oldValue.getString(oldValue.getColumnIndex(
+                            DatabaseContract.DynamoEntry.COLUMN_CONTEXT));
+                    values.put(DatabaseContract.DynamoEntry.COLUMN_CONTEXT,
+                            Integer.toString(Integer.parseInt(oldContext) + 1));
+                }
                 oldValue.close();
 
-				// insert
-				long _id;
-				_id = db.insertWithOnConflict(DatabaseContract.DynamoEntry.TABLE_NAME, null,
-						values, SQLiteDatabase.CONFLICT_REPLACE);
-				db.setTransactionSuccessful();
-				db.endTransaction();
-				if ( _id > 0 ) {
-					returnUri = DatabaseContract.DynamoEntry.DYNAMO_URI.buildUpon().appendPath(key).build();
-				}
-				else {
-					throw new android.database.SQLException("Failed to insert row into " + uri);
-				}
-				break;
-			case DYNAMO:
-				// forward the request to the coordinator
-				Message initiateMessage = new Message(MessageContract.Type.MSG_INSERT_INITIATE_REQUEST,
-						MessageContract.messageCounter++, mCoordinator.MY_ID);
-				initiateMessage.coordinatorId = 0;
-				initiateMessage.content = Utility.buildkeyValueContent(key, value, null);
+                // insert
+                long _id;
+                _id = db.insertWithOnConflict(DatabaseContract.DynamoEntry.TABLE_NAME, null,
+                        values, SQLiteDatabase.CONFLICT_REPLACE);
+                db.setTransactionSuccessful();
+                db.endTransaction();
+                if (_id > 0) {
+                    returnUri = DatabaseContract.DynamoEntry.DYNAMO_URI.buildUpon().appendPath(key).build();
+                } else {
+                    throw new android.database.SQLException("Failed to insert row into " + uri);
+                }
+                Log.i(LOG_TAG, "Insert into DB: " +values.toString());
+                break;
+            case DYNAMO:
+                // forward the request to the coordinator
+                Message initiateMessage = new Message(MessageContract.Type.MSG_INSERT_INITIATE_REQUEST,
+                        MessageContract.messageCounter++, mCoordinator.MY_ID);
+                initiateMessage.coordinatorId = 0;
+                initiateMessage.content = Utility.buildkeyValueContent(key, value, "");
                 // send and wait for response
-				sendAndWaitForResponse(initiateMessage, mCoordinator.getPreferenceList(key));
-				returnUri = DatabaseContract.DynamoEntry.DYNAMO_URI.buildUpon().appendPath(key).build();
-				break;
-			default:
-				throw new UnsupportedOperationException("Unknown uri: " + uri);
-		}
-		getContext().getContentResolver().notifyChange(uri, null);
-		return returnUri;
-	}
+                sendAndWaitForResponse(initiateMessage, mCoordinator.getPreferenceList(key));
+                returnUri = DatabaseContract.DynamoEntry.DYNAMO_URI.buildUpon().appendPath(key).build();
+                break;
+            default:
+                throw new UnsupportedOperationException("Unknown uri: " + uri);
+        }
+        getContext().getContentResolver().notifyChange(uri, null);
+        return returnUri;
+    }
+
     @Override
     public int bulkInsert(Uri uri, ContentValues[] values) {
-        final SQLiteDatabase db = mDynamoDbHelper.getWritableDatabase();
+        final SQLiteDatabase db;
         switch (sUriMatcher.match(uri)) {
             case BLIND:
                 return blindBulkInsert(uri, values);
             case NODE:
                 int insertCount = 0;
+                db = mDynamoDbHelper.getWritableDatabase();
+                db.beginTransaction();
                 for (ContentValues cv : values) {
                     String key = cv.getAsString(DatabaseContract.DynamoEntry.COLUMN_KEY);
                     int owner_id = mCoordinator.findCoordinatingNode(key).id;
@@ -193,10 +199,12 @@ public class SimpleDynamoProvider extends ContentProvider {
 
     // used for re-synchronization, uses the context and coordinator id present in the Cv
     public int blindBulkInsert(Uri uri, ContentValues[] values) {
-        final SQLiteDatabase db = mDynamoDbHelper.getWritableDatabase();
+        final SQLiteDatabase db;
         switch (sUriMatcher.match(uri)) {
             case BLIND:
                 int insertedCount = 0;
+                db = mDynamoDbHelper.getWritableDatabase();
+                db.beginTransaction();
                 for (ContentValues cv : values) {
                     String key = cv.getAsString(DatabaseContract.DynamoEntry.COLUMN_KEY);
                     int owner_id = mCoordinator.findCoordinatingNode(key).id;
@@ -218,12 +226,14 @@ public class SimpleDynamoProvider extends ContentProvider {
     }
 
     @Override
-	public Cursor query(Uri uri, String[] projection, String selection,
-			String[] selectionArgs, String sortOrder) {
-        final SQLiteDatabase db = mDynamoDbHelper.getReadableDatabase();
+    public Cursor query(Uri uri, String[] projection, String selection,
+                        String[] selectionArgs, String sortOrder) {
+        Log.i(LOG_TAG, "QUERY: selection: " + selection);
+        final SQLiteDatabase db;
         Cursor returnCursor;
         switch (sUriMatcher.match(uri)) {
             case NODE:
+                db = mDynamoDbHelper.getReadableDatabase();
                 returnCursor = db.query(
                         DatabaseContract.DynamoEntry.TABLE_NAME,
                         projection,    // The columns to return from the query
@@ -233,13 +243,13 @@ public class SimpleDynamoProvider extends ContentProvider {
                         null,          // don't filter by row groups
                         sortOrder        // The sort order
                 );
-
                 // Tells the Cursor what URI to watch, so it knows when its source data changes
                 returnCursor.setNotificationUri(getContext().getContentResolver(), uri);
+                Log.i(LOG_TAG, "Query Result: " +Utility.convertCursorToString(returnCursor));
                 return returnCursor;
             case DYNAMO:
                 String key = selection;
-                if(selection.equals("*")) {
+                if (selection.equals("*")) {
                     // forward the request to myself
                     Message initiateMessage = new Message(MessageContract.Type.MSG_QUERY_INITIATE_REQUEST,
                             MessageContract.messageCounter++, mCoordinator.MY_ID);
@@ -248,16 +258,16 @@ public class SimpleDynamoProvider extends ContentProvider {
                     // send and wait for response
                     Message response = sendAndWaitForResponse(initiateMessage, mCoordinator.getPreferenceList(key));
                     // convert response to cursor
-                    return Utility.convertResponseToCursor(response.content);
-                }
-                else if(selection.equals("@")) {
+                    returnCursor = Utility.convertResponseToCursor(response.content);
+                    Log.i(LOG_TAG, "Query Result: " +Utility.convertCursorToString(returnCursor));
+                    return returnCursor;
+                } else if (selection.equals("@")) {
                     // just return all the entries in my node
                     selection = null;
                     selectionArgs = null;
                     return query(DatabaseContract.DynamoEntry.NODE_URI,
                             projection, selection, selectionArgs, sortOrder);
-                }
-                else {
+                } else {
                     // forward the request to the coordinator
                     Message initiateMessage = new Message(MessageContract.Type.MSG_QUERY_INITIATE_REQUEST,
                             MessageContract.messageCounter++, mCoordinator.MY_ID);
@@ -265,26 +275,27 @@ public class SimpleDynamoProvider extends ContentProvider {
                     initiateMessage.content = key;
                     // send and wait for response
                     Message response = sendAndWaitForResponse(
-                            initiateMessage,mCoordinator.getPreferenceList(key));
+                            initiateMessage, mCoordinator.getPreferenceList(key));
                     // convert response to cursor
-                    return Utility.convertResponseToCursor(response.content);
+                    returnCursor = Utility.convertResponseToCursor(response.content);
+                    Log.i(LOG_TAG, "Query Result: " +Utility.convertCursorToString(returnCursor));
+                    return returnCursor;
                 }
             default:
                 throw new UnsupportedOperationException("Unknown uri: " + uri);
         }
-	}
+    }
 
-	@Override
-	public int delete(Uri uri, String selection, String[] selectionArgs) {
-        Log.v(LOG_TAG, "DELETE: KEY: " + selection);
+    @Override
+    public int delete(Uri uri, String selection, String[] selectionArgs) {
+        Log.v(LOG_TAG, "DELETE: selection: " + selection);
         String key = selection;
         switch (sUriMatcher.match(uri)) {
             case NODE:
-                if(key == null) {
+                if (key == null) {
                     // delete all the entries in my node
                     return deleteAll(DatabaseContract.DynamoEntry.NODE_URI);
-                }
-                else {
+                } else {
                     // delete is insert with null value
                     ContentValues deleteCv = new ContentValues();
                     deleteCv.put(DatabaseContract.DynamoEntry.COLUMN_KEY, key);
@@ -293,7 +304,7 @@ public class SimpleDynamoProvider extends ContentProvider {
                     return 1;
                 }
             case DYNAMO:
-                if(selection.equals("*")) {
+                if (selection.equals("*")) {
                     // forward the request to myself
                     Message initiateMessage = new Message(MessageContract.Type.MSG_DELETE_INITIATE_REQUEST,
                             MessageContract.messageCounter++, mCoordinator.MY_ID);
@@ -302,17 +313,15 @@ public class SimpleDynamoProvider extends ContentProvider {
                     // send and wait for response
                     Message response = sendAndWaitForResponse(
                             initiateMessage, mCoordinator.getPreferenceList(key));
-                    // convert response to cursor
+                    // convert response to count
                     return Integer.parseInt(response.content);
-                }
-                else if(selection.equals("@")) {
+                } else if (selection.equals("@")) {
                     // just delete all the entries in my node
                     selection = null;
                     selectionArgs = null;
                     return delete(DatabaseContract.DynamoEntry.NODE_URI,
                             selection, selectionArgs);
-                }
-                else {
+                } else {
                     // forward the request to the coordinator
                     Message initiateMessage = new Message(MessageContract.Type.MSG_DELETE_INITIATE_REQUEST,
                             MessageContract.messageCounter++, mCoordinator.MY_ID);
@@ -321,54 +330,55 @@ public class SimpleDynamoProvider extends ContentProvider {
                     // send and wait for response
                     Message response = sendAndWaitForResponse(
                             initiateMessage, mCoordinator.getPreferenceList(key));
-                    // convert response to cursor
+                    // convert response to count
                     return Integer.parseInt(response.content);
                 }
             default:
                 throw new UnsupportedOperationException("Unknown uri: " + uri);
         }
-	}
+    }
 
     private int deleteAll(Uri uri) {
         switch (sUriMatcher.match(uri)) {
             case NODE:
                 // query all the values and update their values with null
                 Cursor queryCursor = query(DatabaseContract.DynamoEntry.NODE_URI, null, null, null, null);
-                ContentValues [] queryCvs = Utility.convertCursorToCvArray(queryCursor);
+                ContentValues[] queryCvs = Utility.convertCursorToCvArray(queryCursor);
+                queryCursor.close();
                 return bulkInsert(DatabaseContract.DynamoEntry.NODE_URI, queryCvs);
             default:
                 throw new UnsupportedOperationException("Unknown uri: " + uri);
         }
     }
 
-	@Override
-	public int update(Uri uri, ContentValues values, String selection,
-					  String[] selectionArgs) {
-		// TODO Auto-generated method stub
-		return 0;
-	}
+    @Override
+    public int update(Uri uri, ContentValues values, String selection,
+                      String[] selectionArgs) {
+        // TODO Auto-generated method stub
+        return 0;
+    }
 
     Message sendAndWaitForResponse(Message message, List<Coordinator.Node> nodesToTry) {
-        for(Coordinator.Node node: nodesToTry) {
+        for (Coordinator.Node node : nodesToTry) {
             mCoordinator.mSender.sendMessage(Utility.convertMessageToJSON(message), node.port);
+            Log.i(LOG_TAG, "Sent Message to node " + node.id + ": " + message);
             // messageMap is used to keep track of the sent messaged
             mCoordinator.messageMap.put(message.id, message);
             int sendType = message.type;
             Message response = null;
             synchronized (message) {
                 try {
-                    wait(MessageContract.RESPONSE_TIMEOUT);
+                    //message.wait(MessageContract.LONG_TIMEOUT);
+                    message.wait();
                     response = (Message) mCoordinator.messageMap.remove(message.id);
-                    if(sendType != response.type) {
-                        Log.i(LOG_TAG, "Response Received: " +response);
+                    if (sendType != response.type) {
+                        Log.i(LOG_TAG, "Response Received: " + response);
                         return response;
-                    }
-                    else {
-                        Log.e(LOG_TAG, "Node Id: " +response.coordinatorId +"has failed.\n" +
+                    } else {
+                        Log.e(LOG_TAG, "Node Id: " + node.id + " has failed.\n" +
                                 "Forwarding request to next node.");
                     }
-                } catch (InterruptedException e)
-                {
+                } catch (InterruptedException e) {
                     Log.e(LOG_TAG, "Request interrupted before receiving a response", e);
                 }
             }
