@@ -293,22 +293,22 @@ public class SimpleDynamoProvider extends ContentProvider {
     @Override
     public int delete(Uri uri, String selection, String[] selectionArgs) {
         Log.i(LOG_TAG, "DELETE: selection: " + selection +"\nURI: " +uri.toString());
-        String key = selection;
         switch (sUriMatcher.match(uri)) {
             case NODE:
-                if (key == null) {
+                if (selection == null) {
                     // delete all the entries in my node
                     return deleteAll(DatabaseContract.DynamoEntry.NODE_URI);
                 } else {
                     // delete is insert with null value
                     ContentValues deleteCv = new ContentValues();
-                    deleteCv.put(DatabaseContract.DynamoEntry.COLUMN_KEY, key);
+                    deleteCv.put(DatabaseContract.DynamoEntry.COLUMN_KEY, selectionArgs[0]);
                     deleteCv.put(DatabaseContract.DynamoEntry.COLUMN_VALUE, (String) null);
                     insert(DatabaseContract.DynamoEntry.NODE_URI, deleteCv);
                     return 1;
                 }
             case DYNAMO:
-                if (selection.equals("*")) {
+                String key = selection;
+                if (key.equals("*")) {
                     // forward the request to myself
                     Message initiateMessage = new Message(MessageContract.Type.MSG_DELETE_INITIATE_REQUEST,
                             MessageContract.messageCounter.getAndIncrement(), mCoordinator.MY_ID);
@@ -319,7 +319,7 @@ public class SimpleDynamoProvider extends ContentProvider {
                             initiateMessage, mCoordinator.getPreferenceList(key));
                     // convert response to count
                     return Integer.parseInt(response.content);
-                } else if (selection.equals("@")) {
+                } else if (key.equals("@")) {
                     // just delete all the entries in my node
                     selection = null;
                     selectionArgs = null;

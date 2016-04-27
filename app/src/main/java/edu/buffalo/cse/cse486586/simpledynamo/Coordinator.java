@@ -614,7 +614,7 @@ public class Coordinator {
                     deleteMessage.id = MessageContract.messageCounter.getAndIncrement();
                     deleteMessage.coordinatorId = MY_ID;
                     for (Node node : NODE_LIST) {
-                        Log.i(LOG_TAG, "Sent MSG_DELETE_REQUEST to : "+ node.port +"\n" +deleteMessage);
+                        Log.i(LOG_TAG, "Sent MSG_DELETE_REQUEST to : "+ node.id +"\n" +deleteMessage);
                         mSender.sendMessage(Utility.convertMessageToJSON(deleteMessage),
                                 node.port);
                     }
