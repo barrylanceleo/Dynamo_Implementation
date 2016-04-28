@@ -4,8 +4,10 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 public class MessageContract {
 
-    public static final int LONG_TIMEOUT = 20000;
-    public static final int SHORT_TIMEOUT = 500;
+    public static final int REQUEST_TIMEOUT = 1000;
+    public static final int INITIATE_REQUEST_TIMEOUT = REQUEST_TIMEOUT*2;
+    public static final int SYNC_REQUEST_TIMEOUT = 500;
+    public static final int SLEEP_TIME_WHILE_SYNC = 10;
     public static AtomicInteger messageCounter = new AtomicInteger(0);
 
     public static class Type {

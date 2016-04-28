@@ -170,7 +170,9 @@ public class Coordinator {
                 MessageContract.messageCounter.getAndIncrement(), MY_ID);
         syncRequestMessage.coordinatorId = 0;
         syncRequestMessage.content = Utility.nodeListToString(nodesIReplicate);
+        long startTime = System.currentTimeMillis();
         for (Node node : relatedNodes) {
+            Log.i(LOG_TAG, "Sent MSG_SYNC_REQUEST to : "+node.id +"\n" +syncRequestMessage);
             mSender.sendMessage(Utility.convertMessageToJSON(syncRequestMessage),
                     node.port);
         }
@@ -184,9 +186,14 @@ public class Coordinator {
         for (int i = 0; i < relatedNodes.size(); i++) {
             try {
                 Message response  = responseQueue.poll(
-                        MessageContract.SHORT_TIMEOUT, TimeUnit.MILLISECONDS);
+                        MessageContract.SYNC_REQUEST_TIMEOUT, TimeUnit.MILLISECONDS);
+                long endTime = System.currentTimeMillis();
                 if(response != null) {
+                    Log.i(LOG_TAG, "TIME TAKEN FOR SYNC RESPONSE: "+(endTime - startTime) +"ms.");
                     responses.add(response);
+                } else {
+                    Log.e(LOG_TAG, "SYNC REQUEST TIMED-OUT."
+                            +"\nTIME TAKEN: " +(endTime - startTime) +"ms.");
                 }
             } catch (InterruptedException e) {
                 Log.e(LOG_TAG, "RE_SYNC: Interrupted " +
@@ -200,7 +207,7 @@ public class Coordinator {
         String messageToInsert = reconcileResponses(responses);
         Log.i(LOG_TAG, "RE_SYNC: Inserting: " +messageToInsert);
         ContentValues [] cvsToInsert = Utility.convertResponseToCvArray(messageToInsert);
-        cp.bulkInsert(DatabaseContract.DynamoEntry.NODE_URI, cvsToInsert);
+        cp.bulkInsert(DatabaseContract.DynamoEntry.BLIND_URI, cvsToInsert);
 
         // update the re-sync flag
         isResynced = true;
@@ -280,6 +287,7 @@ public class Coordinator {
     }
 
     // return list of nodes which contain my data including others data i'm replicating
+    // doesn't include myself
     List<Node> getRelatedNodes(String node_id) {
         List<Node> nodeList = new ArrayList<Node>();
         Node coordinatingNode = findCoordinatingNode(node_id);
@@ -297,7 +305,7 @@ public class Coordinator {
             int id = j%NODE_LIST.size()>=0?j%NODE_LIST.size():NODE_LIST.size()+(j%NODE_LIST.size());
             nodeList.add(NODE_LIST.get(id));
         }
-        for(int j = i; j < i+ DynamoContract.N; j++) {
+        for(int j = i + 1; j < i+ DynamoContract.N; j++) {
             Log.i(LOG_TAG, "Index: " +j +" Mod value: " +j%NODE_LIST.size());
             nodeList.add(NODE_LIST.get(j%NODE_LIST.size()));
         }
@@ -375,6 +383,7 @@ public class Coordinator {
                 insertMessage.type = MessageContract.Type.MSG_INSERT_REQUEST;
                 insertMessage.id = MessageContract.messageCounter.getAndIncrement();
                 insertMessage.coordinatorId = MY_ID;
+                long startTime = System.currentTimeMillis();
                 for (Node node : preferenceList) {
                     Log.i(LOG_TAG, "Sent MSG_INSERT_REQUEST to : "+node.id +"\n" +insertMessage);
                     mSender.sendMessage(Utility.convertMessageToJSON(insertMessage),
@@ -388,12 +397,14 @@ public class Coordinator {
                 List<Message> responses = new ArrayList<Message>();
                 for (int i = 0; i < DynamoContract.W; i++) {
                     try {
-                        Message response = responseQueue.poll(MessageContract.LONG_TIMEOUT, TimeUnit.MILLISECONDS);
-                        if(response!= null) {
+                        Message response = responseQueue.poll(MessageContract.REQUEST_TIMEOUT, TimeUnit.MILLISECONDS);
+                        long endTime = System.currentTimeMillis();
+                        if(response != null) {
+                            Log.i(LOG_TAG, "TIME TAKEN FOR INSERT RESPONSE: "+(endTime - startTime) +"ms.");
                             responses.add(response);
-                        }
-                        else {
-                            Log.e(LOG_TAG, "Time-out while waiting for response to :" +insertMessage);
+                        } else {
+                            Log.e(LOG_TAG, "INSERT REQUEST TIMED-OUT."
+                                    +"\nTIME TAKEN: " +(endTime - startTime) +"ms.");
                         }
                     } catch (InterruptedException e) {
                         Log.e(LOG_TAG, "INSERT: Interrupted " +
@@ -467,6 +478,7 @@ public class Coordinator {
                     queryMessage.type = MessageContract.Type.MSG_QUERY_REQUEST;
                     queryMessage.id = MessageContract.messageCounter.getAndIncrement();
                     queryMessage.coordinatorId = MY_ID;
+                    long startTime = System.currentTimeMillis();
                     for (Node node : NODE_LIST) {
                         Log.i(LOG_TAG, "Sent MSG_QUERY_REQUEST to : "+node.id +"\n" +queryMessage);
                         mSender.sendMessage(Utility.convertMessageToJSON(queryMessage),
@@ -481,12 +493,14 @@ public class Coordinator {
                     List<Message> responses = new ArrayList<Message>();
                     for (int i = 0; i < NODE_LIST.size(); i++) {
                         try {
-                            Message response = responseQueue.poll(MessageContract.LONG_TIMEOUT, TimeUnit.MILLISECONDS);
-                            if(response!= null) {
+                            Message response = responseQueue.poll(MessageContract.REQUEST_TIMEOUT, TimeUnit.MILLISECONDS);
+                            long endTime = System.currentTimeMillis();
+                            if(response != null) {
+                                Log.i(LOG_TAG, "TIME TAKEN FOR QUERY RESPONSE: "+(endTime - startTime) +"ms.");
                                 responses.add(response);
-                            }
-                            else {
-                                Log.e(LOG_TAG, "Time-out while waiting for response to :" +queryMessage);
+                            } else {
+                                Log.e(LOG_TAG, "QUERY REQUEST TIMED-OUT."
+                                        +"\nTIME TAKEN: " +(endTime - startTime) +"ms.");
                             }
                         } catch (InterruptedException e) {
                             Log.e(LOG_TAG, "INSERT: Interrupted " +
@@ -511,6 +525,7 @@ public class Coordinator {
                     queryMessage.type = MessageContract.Type.MSG_QUERY_REQUEST;
                     queryMessage.id = MessageContract.messageCounter.getAndIncrement();
                     queryMessage.coordinatorId = MY_ID;
+                    long startTime = System.currentTimeMillis();
                     for (Node node : preferenceList) {
                         Log.i(LOG_TAG, "Sent MSG_QUERY_REQUEST to : "+node.port +"\n" +queryMessage);
                         mSender.sendMessage(Utility.convertMessageToJSON(queryMessage),
@@ -525,12 +540,14 @@ public class Coordinator {
                     List<Message> responses = new ArrayList<Message>();
                     for (int i = 0; i < DynamoContract.R; i++) {
                         try {
-                            Message response = responseQueue.poll(MessageContract.LONG_TIMEOUT, TimeUnit.MILLISECONDS);
-                            if(response!= null) {
+                            Message response = responseQueue.poll(MessageContract.REQUEST_TIMEOUT, TimeUnit.MILLISECONDS);
+                            long endTime = System.currentTimeMillis();
+                            if(response != null) {
+                                Log.i(LOG_TAG, "TIME TAKEN FOR QUERY RESPONSE: "+(endTime - startTime) +"ms.");
                                 responses.add(response);
-                            }
-                            else {
-                                Log.e(LOG_TAG, "Time-out while waiting for response to :" +queryMessage);
+                            } else {
+                                Log.e(LOG_TAG, "QUERY REQUEST TIMED-OUT."
+                                        +"\nTIME TAKEN: " +(endTime - startTime) +"ms.");
                             }
                         } catch (InterruptedException e) {
                             Log.e(LOG_TAG, "INSERT: Interrupted " +
@@ -613,6 +630,7 @@ public class Coordinator {
                     deleteMessage.type = MessageContract.Type.MSG_DELETE_REQUEST;
                     deleteMessage.id = MessageContract.messageCounter.getAndIncrement();
                     deleteMessage.coordinatorId = MY_ID;
+                    long startTime = System.currentTimeMillis();
                     for (Node node : NODE_LIST) {
                         Log.i(LOG_TAG, "Sent MSG_DELETE_REQUEST to : "+ node.id +"\n" +deleteMessage);
                         mSender.sendMessage(Utility.convertMessageToJSON(deleteMessage),
@@ -627,12 +645,14 @@ public class Coordinator {
                     List<Message> responses = new ArrayList<Message>();
                     for (int i = 0; i < NODE_LIST.size(); i++) {
                         try {
-                            Message response = responseQueue.poll(MessageContract.LONG_TIMEOUT, TimeUnit.MILLISECONDS);
-                            if(response!= null) {
+                            Message response = responseQueue.poll(MessageContract.REQUEST_TIMEOUT, TimeUnit.MILLISECONDS);
+                            long endTime = System.currentTimeMillis();
+                            if(response != null) {
+                                Log.i(LOG_TAG, "TIME TAKEN FOR DELETE RESPONSE: "+(endTime - startTime) +"ms.");
                                 responses.add(response);
-                            }
-                            else {
-                                Log.e(LOG_TAG, "Time-out while waiting for response to :" +deleteMessage);
+                            } else {
+                                Log.e(LOG_TAG, "Time-out while waiting for response to :" +deleteMessage
+                                        +"\nTIME TAKEN: " +(endTime - startTime) +"ms.");
                             }
                         } catch (InterruptedException e) {
                             Log.e(LOG_TAG, "INSERT: Interrupted " +
@@ -661,6 +681,7 @@ public class Coordinator {
                     deleteMessage.type = MessageContract.Type.MSG_DELETE_REQUEST;
                     deleteMessage.id = MessageContract.messageCounter.getAndIncrement();
                     deleteMessage.coordinatorId = MY_ID;
+                    long startTime = System.currentTimeMillis();
                     for (Node node : preferenceList) {
                         Log.i(LOG_TAG, "Sent MSG_DELETE_REQUEST to : " +node.port +"\n" +deleteMessage);
                         mSender.sendMessage(Utility.convertMessageToJSON(deleteMessage),
@@ -675,12 +696,14 @@ public class Coordinator {
                     List<Message> responses = new ArrayList<Message>();
                     for (int i = 0; i < DynamoContract.W; i++) {
                         try {
-                            Message response = responseQueue.poll(MessageContract.LONG_TIMEOUT, TimeUnit.MILLISECONDS);
-                            if(response!= null) {
+                            Message response = responseQueue.poll(MessageContract.REQUEST_TIMEOUT, TimeUnit.MILLISECONDS);
+                            long endTime = System.currentTimeMillis();
+                            if(response != null) {
+                                Log.i(LOG_TAG, "TIME TAKEN FOR DELETE RESPONSE: "+(endTime - startTime) +"ms.");
                                 responses.add(response);
-                            }
-                            else {
-                                Log.e(LOG_TAG, "Time-out while waiting for response to :" +deleteMessage);
+                            } else {
+                                Log.e(LOG_TAG, "Time-out while waiting for response to :" +deleteMessage
+                                        +"\nTIME TAKEN: " +(endTime - startTime) +"ms.");
                             }
                         } catch (InterruptedException e) {
                             Log.e(LOG_TAG, "DELETE: Interrupted " +

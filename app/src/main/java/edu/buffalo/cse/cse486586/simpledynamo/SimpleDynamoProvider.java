@@ -80,7 +80,7 @@ public class SimpleDynamoProvider extends ContentProvider {
 
     @Override
     public Uri insert(Uri uri, ContentValues values) {
-        final SQLiteDatabase db;
+        SQLiteDatabase db;
         String key = values.getAsString(DatabaseContract.DynamoEntry.COLUMN_KEY);
         String value = values.getAsString(DatabaseContract.DynamoEntry.COLUMN_VALUE);
         int owner_id = mCoordinator.findCoordinatingNode(key).id;
@@ -94,6 +94,7 @@ public class SimpleDynamoProvider extends ContentProvider {
                 // insert into this node
                 db = mDynamoDbHelper.getWritableDatabase();
                 db.beginTransaction();
+                Log.i(LOG_TAG, "Querying DB.");
                 Cursor oldValue = db.query(
                         DatabaseContract.DynamoEntry.TABLE_NAME,
                         null,
@@ -103,6 +104,7 @@ public class SimpleDynamoProvider extends ContentProvider {
                         null,
                         null
                 );
+                Log.i(LOG_TAG, "Query on DB Complete.");
                 // if key not present already insert context = 1, else ++context
                 if (oldValue.getCount() == 0) {
                     values.put(DatabaseContract.DynamoEntry.COLUMN_CONTEXT,
@@ -142,13 +144,12 @@ public class SimpleDynamoProvider extends ContentProvider {
             default:
                 throw new UnsupportedOperationException("Unknown uri: " + uri);
         }
-        getContext().getContentResolver().notifyChange(uri, null);
         return returnUri;
     }
 
     @Override
     public int bulkInsert(Uri uri, ContentValues[] values) {
-        final SQLiteDatabase db;
+        SQLiteDatabase db;
         switch (sUriMatcher.match(uri)) {
             case BLIND:
                 return blindBulkInsert(uri, values);
@@ -160,7 +161,6 @@ public class SimpleDynamoProvider extends ContentProvider {
                     String key = cv.getAsString(DatabaseContract.DynamoEntry.COLUMN_KEY);
                     int owner_id = mCoordinator.findCoordinatingNode(key).id;
                     cv.put(DatabaseContract.DynamoEntry.COLUMN_OWNER_ID, owner_id);
-                    db.beginTransaction();
                     Cursor oldValue = db.query(
                             DatabaseContract.DynamoEntry.TABLE_NAME,
                             null,
@@ -193,6 +193,7 @@ public class SimpleDynamoProvider extends ContentProvider {
                 }
                 db.setTransactionSuccessful();
                 db.endTransaction();
+                Log.i(LOG_TAG, "Bulk Insert into DB: " +insertCount +" rows");
                 return insertCount;
             default:
                 throw new UnsupportedOperationException("Unknown uri: " + uri);
@@ -201,7 +202,7 @@ public class SimpleDynamoProvider extends ContentProvider {
 
     // used for re-synchronization, uses the context and coordinator id present in the Cv
     public int blindBulkInsert(Uri uri, ContentValues[] values) {
-        final SQLiteDatabase db;
+        SQLiteDatabase db;
         switch (sUriMatcher.match(uri)) {
             case BLIND:
                 int insertedCount = 0;
@@ -211,7 +212,6 @@ public class SimpleDynamoProvider extends ContentProvider {
                     String key = cv.getAsString(DatabaseContract.DynamoEntry.COLUMN_KEY);
                     int owner_id = mCoordinator.findCoordinatingNode(key).id;
                     cv.put(DatabaseContract.DynamoEntry.COLUMN_OWNER_ID, owner_id);
-                    db.beginTransaction();
                     long _id;
                     _id = db.insertWithOnConflict(DatabaseContract.DynamoEntry.TABLE_NAME, null,
                             cv, SQLiteDatabase.CONFLICT_REPLACE);
@@ -221,6 +221,7 @@ public class SimpleDynamoProvider extends ContentProvider {
                 }
                 db.setTransactionSuccessful();
                 db.endTransaction();
+                Log.i(LOG_TAG, "Blind Bulk Insert into DB: " +insertedCount +" rows");
                 return insertedCount;
             default:
                 throw new UnsupportedOperationException("Unknown uri: " + uri);
@@ -231,7 +232,7 @@ public class SimpleDynamoProvider extends ContentProvider {
     public Cursor query(Uri uri, String[] projection, String selection,
                         String[] selectionArgs, String sortOrder) {
         Log.i(LOG_TAG, "QUERY: selection: " + selection +"\nURI: " +uri.toString());
-        final SQLiteDatabase db;
+        SQLiteDatabase db;
         Cursor returnCursor;
         switch (sUriMatcher.match(uri)) {
             case NODE:
@@ -245,8 +246,6 @@ public class SimpleDynamoProvider extends ContentProvider {
                         null,          // don't filter by row groups
                         sortOrder        // The sort order
                 );
-                // Tells the Cursor what URI to watch, so it knows when its source data changes
-                returnCursor.setNotificationUri(getContext().getContentResolver(), uri);
                 Log.i(LOG_TAG, "Query Result: " +Utility.dumpCursor(returnCursor));
                 return returnCursor;
             case DYNAMO:
@@ -260,15 +259,19 @@ public class SimpleDynamoProvider extends ContentProvider {
                     // send and wait for response
                     Message response = sendAndWaitForResponse(initiateMessage, mCoordinator.getPreferenceList(key));
                     // convert response to cursor
-                    returnCursor = Utility.convertResponseToCursor(response.content);
-                    Log.i(LOG_TAG, "Query Result: " +Utility.dumpCursor(returnCursor));
-                    return returnCursor;
+                    if(response != null) {
+                        returnCursor = Utility.convertResponseToCursor(response.content);
+                        Log.i(LOG_TAG, "Query Result: " +Utility.dumpCursor(returnCursor));
+                        return returnCursor;
+                    }
+                    return null;
                 } else if (selection.equals("@")) {
                     // just return all the entries in my node
                     projection = new String[] {DatabaseContract.DynamoEntry.COLUMN_KEY,
                             DatabaseContract.DynamoEntry.COLUMN_VALUE};
-                    selection = DatabaseContract.DynamoEntry.COLUMN_VALUE +" IS NOT NULL ";
-                    selectionArgs = null;
+                    selection = DatabaseContract.DynamoEntry.COLUMN_VALUE +" IS NOT NULL AND " +
+                            DatabaseContract.DynamoEntry.COLUMN_VALUE +" != ?";
+                    selectionArgs = new String[]{"null"};
                     return query(DatabaseContract.DynamoEntry.NODE_URI,
                             projection, selection, selectionArgs, sortOrder);
                 } else {
@@ -364,23 +367,30 @@ public class SimpleDynamoProvider extends ContentProvider {
 
     Message sendAndWaitForResponse(Message message, List<Coordinator.Node> nodesToTry) {
         for (Coordinator.Node node : nodesToTry) {
+            long startTime = System.currentTimeMillis();
             mCoordinator.mSender.sendMessage(Utility.convertMessageToJSON(message), node.port);
             Log.i(LOG_TAG, "Sent Message to node " + node.id + ": " + message);
-            // messageMap is used to keep track of the sent messaged
+            // messageMap is used to keep track of the sent messages
             mCoordinator.messageMap.put(message.id, message);
             int sendType = message.type;
-            Message response = null;
+            Message response;
             synchronized (message) {
                 try {
                     //message.wait(MessageContract.LONG_TIMEOUT);
-                    message.wait();
+                    message.wait(MessageContract.INITIATE_REQUEST_TIMEOUT);
                     response = (Message) mCoordinator.messageMap.remove(message.id);
                     if (sendType != response.type) {
                         Log.i(LOG_TAG, "Response Received: " + response);
+                        long endTime = System.currentTimeMillis();
+                        Log.i(LOG_TAG, "TIME TAKEN FOR INITIATE RESPONSE: "+(endTime - startTime) +"ms.");
                         return response;
                     } else {
-                        Log.e(LOG_TAG, "Node Id: " + node.id + " has failed.\n" +
-                                "Forwarding request to next node.");
+                        long endTime = System.currentTimeMillis();
+                        Log.e(LOG_TAG, "Node Id: " + node.id + " has TIMED-OUT. Forwarding request to next node."
+                                +"\nTIME TAKEN: " +(endTime - startTime) +"ms.");
+
+                        //increment the message id so that, after time-out response to old messages are ignored
+                        message.id = MessageContract.messageCounter.getAndIncrement();
                     }
                 } catch (InterruptedException e) {
                     Log.e(LOG_TAG, "Request interrupted before receiving a response", e);
