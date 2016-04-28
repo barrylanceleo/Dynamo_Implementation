@@ -472,7 +472,7 @@ public class Coordinator {
                         responseQueue.put(handledMessage);
                     }
                     else {
-                        Log.e(LOG_TAG, "Ignored Message: " +handledMessage);
+                        Log.i(LOG_TAG, "Ignored Message: " +handledMessage);
                     }
                 } catch (InterruptedException e) {
                     Log.e(LOG_TAG, "INSERT: Interrupted " +
@@ -635,7 +635,7 @@ public class Coordinator {
                         responseQueue.put(handledMessage);
                     }
                     else {
-                        Log.e(LOG_TAG, "Ignored Message: " +handledMessage);
+                        Log.i(LOG_TAG, "Ignored Message: " +handledMessage);
                     }
                 } catch (InterruptedException e) {
                     Log.e(LOG_TAG, "QUERY: Interrupted " +
