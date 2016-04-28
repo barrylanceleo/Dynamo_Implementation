@@ -161,25 +161,27 @@ public class Coordinator {
         // send request to nodes which contain my data including others data i'm replicating
         List<Node> relatedNodes = getRelatedNodes(Integer.toString(MY_ID));
         List<Node> nodesIReplicate = getNodesIreplicate(Integer.toString(MY_ID));
-        Log.i(LOG_TAG, "Related Nodes:");
-        Utility.printNodeList(relatedNodes);
-        Log.i(LOG_TAG, "Replicated Nodes:");
-        Utility.printNodeList(nodesIReplicate);
+//        Log.i(LOG_TAG, "Related Nodes:");
+//        Utility.printNodeList(relatedNodes);
+//        Log.i(LOG_TAG, "Replicated Nodes:");
+ //       Utility.printNodeList(nodesIReplicate);
         // build sync request message
         Message syncRequestMessage = new Message(MessageContract.Type.MSG_SYNC_REQUEST,
                 MessageContract.messageCounter.getAndIncrement(), MY_ID);
         syncRequestMessage.coordinatorId = 0;
         syncRequestMessage.content = Utility.nodeListToString(nodesIReplicate);
+
+        // create a blocking queue to keep track of the responses
+        LinkedBlockingQueue<Message> responseQueue = new LinkedBlockingQueue<Message>();
+        messageMap.put(syncRequestMessage.id, responseQueue);
+//        Log.i(LOG_TAG, "Added queue for MSG_SYNC_REQUEST :\n" +syncRequestMessage);
+
         long startTime = System.currentTimeMillis();
         for (Node node : relatedNodes) {
             Log.i(LOG_TAG, "Sent MSG_SYNC_REQUEST to : "+node.id +"\n" +syncRequestMessage);
             mSender.sendMessage(Utility.convertMessageToJSON(syncRequestMessage),
                     node.port);
         }
-
-        // create a blocking queue to keep track of the responses
-        LinkedBlockingQueue<Message> responseQueue = new LinkedBlockingQueue<Message>();
-        messageMap.put(syncRequestMessage.id, responseQueue);
 
         // poll till we receive all responses
         List<Message> responses = new ArrayList<Message>();
@@ -202,6 +204,7 @@ public class Coordinator {
         }
         // remove the message from the messageMap
         messageMap.remove(syncRequestMessage.id);
+//        Log.i(LOG_TAG, "Removed queue for MSG_SYNC_REQUEST :\n" +syncRequestMessage);
 
         // reconcile the responses and insert into my CP
         String messageToInsert = reconcileResponses(responses);
@@ -212,7 +215,6 @@ public class Coordinator {
         // update the re-sync flag
         isResynced = true;
         Log.i(LOG_TAG, "Re-sync Complete.");
-
     }
 
     void start(){
@@ -299,14 +301,11 @@ public class Coordinator {
         if(i == NODE_LIST.size())
             throw new RuntimeException("FATAL ERROR: Node not present in NodeList. " +
                     "This shouldn't happen.");
-        for(int j = i - DynamoContract.N + 1; j < i ; j++) {
-            Log.i(LOG_TAG, "Index: " +j +" Mod value: "
-                    +(j%NODE_LIST.size()>=0?j%NODE_LIST.size():NODE_LIST.size()+(j%NODE_LIST.size())));
-            int id = j%NODE_LIST.size()>=0?j%NODE_LIST.size():NODE_LIST.size()+(j%NODE_LIST.size());
+        for(int j = i - DynamoContract.N + 1; j < i; j++) {
+           int id = j%NODE_LIST.size()>=0?j%NODE_LIST.size():NODE_LIST.size()+(j%NODE_LIST.size());
             nodeList.add(NODE_LIST.get(id));
         }
         for(int j = i + 1; j < i+ DynamoContract.N; j++) {
-            Log.i(LOG_TAG, "Index: " +j +" Mod value: " +j%NODE_LIST.size());
             nodeList.add(NODE_LIST.get(j%NODE_LIST.size()));
         }
         return nodeList;
@@ -326,8 +325,6 @@ public class Coordinator {
                     "This shouldn't happen.");
 
         for(int j = i - DynamoContract.N + 1; j <= i ; j++) {
-            Log.i(LOG_TAG, "Index: " +j +" Mod value: "
-                    +(j%NODE_LIST.size()>=0?j%NODE_LIST.size():NODE_LIST.size()+(j%NODE_LIST.size())));
             int id = j%NODE_LIST.size()>=0?j%NODE_LIST.size():NODE_LIST.size()+(j%NODE_LIST.size());
             nodeList.add(NODE_LIST.get(id));
         }
@@ -357,6 +354,7 @@ public class Coordinator {
                 handledMessage.type = MessageContract.Type.MSG_SYNC_RESPONSE;
                 handledMessage.content = Utility.convertCursorToString(reponseCursor);
                 reponseCursor.close();
+                Log.i(LOG_TAG, "Sent SYNC_RESPONSE to : "+handledMessage.sourceId +"\n" +handledMessage);
                 mSender.sendMessage(Utility.convertMessageToJSON(handledMessage),
                         NODE_MAP.get(handledMessage.sourceId).port);
                 break;
@@ -367,7 +365,11 @@ public class Coordinator {
                         messageMap.get(handledMessage.id);
                 try {
                     if(responseQueue != null) {
+                        Log.i(LOG_TAG, "Added MSG_SYNC_RESPONSE to queue\n" + handledMessage);
                         responseQueue.put(handledMessage);
+                    }
+                    else {
+                        Log.i(LOG_TAG, "Ignored Message: " +handledMessage);
                     }
                 } catch (InterruptedException e) {
                     Log.e(LOG_TAG, "SYNC: Interrupted " +
@@ -383,15 +385,18 @@ public class Coordinator {
                 insertMessage.type = MessageContract.Type.MSG_INSERT_REQUEST;
                 insertMessage.id = MessageContract.messageCounter.getAndIncrement();
                 insertMessage.coordinatorId = MY_ID;
+
+                // create a blocking queue to keep track of the responses
+                LinkedBlockingQueue<Message> responseQueue = new LinkedBlockingQueue<Message>();
+                messageMap.put(insertMessage.id, responseQueue);
+//                Log.i(LOG_TAG, "Added queue for MSG_INSERT_REQUEST :\n" +insertMessage);
+
                 long startTime = System.currentTimeMillis();
                 for (Node node : preferenceList) {
                     Log.i(LOG_TAG, "Sent MSG_INSERT_REQUEST to : "+node.id +"\n" +insertMessage);
                     mSender.sendMessage(Utility.convertMessageToJSON(insertMessage),
                             node.port);
                 }
-                // create a blocking queue to keep track of the responses
-                LinkedBlockingQueue<Message> responseQueue = new LinkedBlockingQueue<Message>();
-                messageMap.put(insertMessage.id, responseQueue);
 
                 // poll till we receive all responses or timeout
                 List<Message> responses = new ArrayList<Message>();
@@ -413,10 +418,11 @@ public class Coordinator {
                 }
                 // remove the message from the messageMap
                 messageMap.remove(insertMessage.id);
+//                Log.i(LOG_TAG, "Removed queue for MSG_INSERT_REQUEST :\n" +insertMessage);
 
                 // check if we received enough responses and send a response to the source
                 if (responses.size() < DynamoContract.W) {
-                    Log.e(LOG_TAG, "INSERT: Received only  " + responses.size() + "responses" +
+                    Log.e(LOG_TAG, "INSERT: Received only  " + responses.size() + " responses" +
                             " for message: " + insertMessage);
                 } else {
                     handledMessage.type = MessageContract.Type.MSG_INSERT_INITIATE_RESPONSE;
@@ -462,7 +468,11 @@ public class Coordinator {
                         messageMap.get(handledMessage.id);
                 try {
                     if(responseQueue != null) {
+                        Log.i(LOG_TAG, "Added MSG_INSERT_RESPONSE to queue\n" + handledMessage);
                         responseQueue.put(handledMessage);
+                    }
+                    else {
+                        Log.e(LOG_TAG, "Ignored Message: " +handledMessage);
                     }
                 } catch (InterruptedException e) {
                     Log.e(LOG_TAG, "INSERT: Interrupted " +
@@ -478,16 +488,18 @@ public class Coordinator {
                     queryMessage.type = MessageContract.Type.MSG_QUERY_REQUEST;
                     queryMessage.id = MessageContract.messageCounter.getAndIncrement();
                     queryMessage.coordinatorId = MY_ID;
+
+                    // create a blocking queue to keep track of the responses
+                    LinkedBlockingQueue<Message> responseQueue = new LinkedBlockingQueue<Message>();
+                    messageMap.put(queryMessage.id, responseQueue);
+//                    Log.i(LOG_TAG, "Added queue for MSG_QUERY_REQUEST :\n" +queryMessage);
+
                     long startTime = System.currentTimeMillis();
                     for (Node node : NODE_LIST) {
                         Log.i(LOG_TAG, "Sent MSG_QUERY_REQUEST to : "+node.id +"\n" +queryMessage);
                         mSender.sendMessage(Utility.convertMessageToJSON(queryMessage),
                                 node.port);
                     }
-
-                    // create a blocking queue to keep track of the responses
-                    LinkedBlockingQueue<Message> responseQueue = new LinkedBlockingQueue<Message>();
-                    messageMap.put(queryMessage.id, responseQueue);
 
                     // poll till we receive all responses
                     List<Message> responses = new ArrayList<Message>();
@@ -496,19 +508,21 @@ public class Coordinator {
                             Message response = responseQueue.poll(MessageContract.REQUEST_TIMEOUT, TimeUnit.MILLISECONDS);
                             long endTime = System.currentTimeMillis();
                             if(response != null) {
-                                Log.i(LOG_TAG, "TIME TAKEN FOR QUERY RESPONSE: "+(endTime - startTime) +"ms.");
+                                Log.i(LOG_TAG, "TIME TAKEN FOR * QUERY RESPONSE: "+(endTime - startTime) +"ms.");
                                 responses.add(response);
                             } else {
-                                Log.e(LOG_TAG, "QUERY REQUEST TIMED-OUT."
-                                        +"\nTIME TAKEN: " +(endTime - startTime) +"ms.");
+                                Log.e(LOG_TAG, "* QUERY REQUEST TIMED-OUT."
+                                        +"\nTIME TAKEN: " +(endTime - startTime) +"ms.\n" +queryMessage);
                             }
                         } catch (InterruptedException e) {
-                            Log.e(LOG_TAG, "INSERT: Interrupted " +
+                            Log.e(LOG_TAG, "QUERY: Interrupted " +
                                     "while waiting for response to: " + queryMessage, e);
                         }
                     }
                     // remove the message from the messageMap
                     messageMap.remove(queryMessage.id);
+//                    Log.i(LOG_TAG, "Removed queue for MSG_QUERY_REQUEST :\n" +queryMessage);
+
 
                     // reconcile the responses and send a response to the source
                     handledMessage.type = MessageContract.Type.MSG_QUERY_INITIATE_RESPONSE;
@@ -525,16 +539,18 @@ public class Coordinator {
                     queryMessage.type = MessageContract.Type.MSG_QUERY_REQUEST;
                     queryMessage.id = MessageContract.messageCounter.getAndIncrement();
                     queryMessage.coordinatorId = MY_ID;
-                    long startTime = System.currentTimeMillis();
-                    for (Node node : preferenceList) {
-                        Log.i(LOG_TAG, "Sent MSG_QUERY_REQUEST to : "+node.port +"\n" +queryMessage);
-                        mSender.sendMessage(Utility.convertMessageToJSON(queryMessage),
-                                node.port);
-                    }
 
                     // create a blocking queue to keep track of the responses
                     LinkedBlockingQueue<Message> responseQueue = new LinkedBlockingQueue<Message>();
                     messageMap.put(queryMessage.id, responseQueue);
+//                    Log.i(LOG_TAG, "Added queue for MSG_QUERY_REQUEST :\n" +queryMessage);
+
+                    long startTime = System.currentTimeMillis();
+                    for (Node node : preferenceList) {
+                        Log.i(LOG_TAG, "Sent MSG_QUERY_REQUEST to : "+node.id +"\n" +queryMessage);
+                        mSender.sendMessage(Utility.convertMessageToJSON(queryMessage),
+                                node.port);
+                    }
 
                     // poll till we receive all responses or timeout
                     List<Message> responses = new ArrayList<Message>();
@@ -547,19 +563,20 @@ public class Coordinator {
                                 responses.add(response);
                             } else {
                                 Log.e(LOG_TAG, "QUERY REQUEST TIMED-OUT."
-                                        +"\nTIME TAKEN: " +(endTime - startTime) +"ms.");
+                                        +"\nTIME TAKEN: " +(endTime - startTime) +"ms.\n" +queryMessage);
                             }
                         } catch (InterruptedException e) {
-                            Log.e(LOG_TAG, "INSERT: Interrupted " +
+                            Log.e(LOG_TAG, "QUERY: Interrupted " +
                                     "while waiting for response to: " + queryMessage, e);
                         }
                     }
                     // remove the message from the messageMap
                     messageMap.remove(queryMessage.id);
+//                    Log.i(LOG_TAG, "Removed queue for MSG_QUERY_REQUEST :\n" +queryMessage);
 
                     // check if we received enough responses and send a response to the source
                     if (responses.size() < DynamoContract.R) {
-                        Log.e(LOG_TAG, "INSERT: Received only  " + responses.size() + "responses" +
+                        Log.e(LOG_TAG, "QUERY: Received only  " + responses.size() + " responses" +
                                 " for message: " + queryMessage);
                     } else {
                         handledMessage.type = MessageContract.Type.MSG_QUERY_INITIATE_RESPONSE;
@@ -614,10 +631,14 @@ public class Coordinator {
                         messageMap.get(handledMessage.id);
                 try {
                     if(responseQueue != null) {
+                        Log.i(LOG_TAG, "Added MSG_QUERY_RESPONSE to queue\n" + handledMessage);
                         responseQueue.put(handledMessage);
                     }
+                    else {
+                        Log.e(LOG_TAG, "Ignored Message: " +handledMessage);
+                    }
                 } catch (InterruptedException e) {
-                    Log.e(LOG_TAG, "INSERT: Interrupted " +
+                    Log.e(LOG_TAG, "QUERY: Interrupted " +
                             "while adding response to queue." + handledMessage, e);
                 }
             }
@@ -630,16 +651,18 @@ public class Coordinator {
                     deleteMessage.type = MessageContract.Type.MSG_DELETE_REQUEST;
                     deleteMessage.id = MessageContract.messageCounter.getAndIncrement();
                     deleteMessage.coordinatorId = MY_ID;
+
+                    // create a blocking queue to keep track of the responses
+                    LinkedBlockingQueue<Message> responseQueue = new LinkedBlockingQueue<Message>();
+                    messageMap.put(deleteMessage.id, responseQueue);
+//                    Log.i(LOG_TAG, "Added queue for MSG_DELETE_REQUEST :\n" +deleteMessage);
+
                     long startTime = System.currentTimeMillis();
                     for (Node node : NODE_LIST) {
                         Log.i(LOG_TAG, "Sent MSG_DELETE_REQUEST to : "+ node.id +"\n" +deleteMessage);
                         mSender.sendMessage(Utility.convertMessageToJSON(deleteMessage),
                                 node.port);
                     }
-
-                    // create a blocking queue to keep track of the responses
-                    LinkedBlockingQueue<Message> responseQueue = new LinkedBlockingQueue<Message>();
-                    messageMap.put(deleteMessage.id, responseQueue);
 
                     // poll till we receive all responses
                     List<Message> responses = new ArrayList<Message>();
@@ -648,19 +671,20 @@ public class Coordinator {
                             Message response = responseQueue.poll(MessageContract.REQUEST_TIMEOUT, TimeUnit.MILLISECONDS);
                             long endTime = System.currentTimeMillis();
                             if(response != null) {
-                                Log.i(LOG_TAG, "TIME TAKEN FOR DELETE RESPONSE: "+(endTime - startTime) +"ms.");
+                                Log.i(LOG_TAG, "TIME TAKEN FOR * DELETE RESPONSE: "+(endTime - startTime) +"ms.");
                                 responses.add(response);
                             } else {
-                                Log.e(LOG_TAG, "Time-out while waiting for response to :" +deleteMessage
-                                        +"\nTIME TAKEN: " +(endTime - startTime) +"ms.");
+                                Log.e(LOG_TAG, "* DELETE REQUEST TIMED-OUT."
+                                        +"\nTIME TAKEN: " +(endTime - startTime) +"ms.\n" +deleteMessage);
                             }
                         } catch (InterruptedException e) {
-                            Log.e(LOG_TAG, "INSERT: Interrupted " +
+                            Log.e(LOG_TAG, "DELETE: Interrupted " +
                                     "while waiting for response to: " + deleteMessage, e);
                         }
                     }
                     // remove the message from the messageMap
                     messageMap.remove(deleteMessage.id);
+//                    Log.i(LOG_TAG, "Removed queue for MSG_DELETE_REQUEST :\n" +deleteMessage);
 
                     // count the total number of entries deleted and send a response to the source
                     int deletedCount = 0;
@@ -681,16 +705,18 @@ public class Coordinator {
                     deleteMessage.type = MessageContract.Type.MSG_DELETE_REQUEST;
                     deleteMessage.id = MessageContract.messageCounter.getAndIncrement();
                     deleteMessage.coordinatorId = MY_ID;
+
+                    // create a blocking queue to keep track of the responses
+                    LinkedBlockingQueue<Message> responseQueue = new LinkedBlockingQueue<Message>();
+                    messageMap.put(deleteMessage.id, responseQueue);
+//                    Log.i(LOG_TAG, "Added queue for MSG_DELETE_REQUEST :\n" +deleteMessage);
+
                     long startTime = System.currentTimeMillis();
                     for (Node node : preferenceList) {
                         Log.i(LOG_TAG, "Sent MSG_DELETE_REQUEST to : " +node.port +"\n" +deleteMessage);
                         mSender.sendMessage(Utility.convertMessageToJSON(deleteMessage),
                                 node.port);
                     }
-
-                    // create a blocking queue to keep track of the responses
-                    LinkedBlockingQueue<Message> responseQueue = new LinkedBlockingQueue<Message>();
-                    messageMap.put(deleteMessage.id, responseQueue);
 
                     // poll till we receive all responses or timeout
                     List<Message> responses = new ArrayList<Message>();
@@ -702,8 +728,8 @@ public class Coordinator {
                                 Log.i(LOG_TAG, "TIME TAKEN FOR DELETE RESPONSE: "+(endTime - startTime) +"ms.");
                                 responses.add(response);
                             } else {
-                                Log.e(LOG_TAG, "Time-out while waiting for response to :" +deleteMessage
-                                        +"\nTIME TAKEN: " +(endTime - startTime) +"ms.");
+                                Log.e(LOG_TAG, "DELETE REQUEST TIMED-OUT."
+                                        +"\nTIME TAKEN: " +(endTime - startTime) +"ms.\n" +deleteMessage);
                             }
                         } catch (InterruptedException e) {
                             Log.e(LOG_TAG, "DELETE: Interrupted " +
@@ -712,10 +738,11 @@ public class Coordinator {
                     }
                     // remove the message from the messageMap
                     messageMap.remove(deleteMessage.id);
+//                    Log.i(LOG_TAG, "Removed queue for MSG_DELETE_REQUEST :\n" +deleteMessage);
 
                     // check if we received enough responses and send a response to the source
                     if (responses.size() < DynamoContract.W) {
-                        Log.e(LOG_TAG, "DELETE: Received only  " + responses.size() + "responses" +
+                        Log.e(LOG_TAG, "DELETE: Received only  " + responses.size() + " responses" +
                                 " for message: " + deleteMessage);
                     } else {
                         // get the max rows deleted, should be one
@@ -774,7 +801,11 @@ public class Coordinator {
                         messageMap.get(handledMessage.id);
                 try {
                     if(responseQueue != null) {
+                        Log.i(LOG_TAG, "Added MSG_DELETE_RESPONSE to queue\n" + handledMessage);
                         responseQueue.put(handledMessage);
+                    }
+                    else {
+                        Log.i(LOG_TAG, "Ignored Message: " +handledMessage);
                     }
                 } catch (InterruptedException e) {
                     Log.e(LOG_TAG, "DELETE: Interrupted " +

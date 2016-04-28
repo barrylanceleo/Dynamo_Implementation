@@ -246,7 +246,7 @@ public class SimpleDynamoProvider extends ContentProvider {
                         null,          // don't filter by row groups
                         sortOrder        // The sort order
                 );
-                Log.i(LOG_TAG, "Query Result: " +Utility.dumpCursor(returnCursor));
+//                Log.i(LOG_TAG, "Query Result: " +Utility.dumpCursor(returnCursor));
                 return returnCursor;
             case DYNAMO:
                 String key = selection;
@@ -261,7 +261,7 @@ public class SimpleDynamoProvider extends ContentProvider {
                     // convert response to cursor
                     if(response != null) {
                         returnCursor = Utility.convertResponseToCursor(response.content);
-                        Log.i(LOG_TAG, "Query Result: " +Utility.dumpCursor(returnCursor));
+//                        Log.i(LOG_TAG, "Query Result: " +Utility.dumpCursor(returnCursor));
                         return returnCursor;
                     }
                     return null;
@@ -285,7 +285,7 @@ public class SimpleDynamoProvider extends ContentProvider {
                             initiateMessage, mCoordinator.getPreferenceList(key));
                     // convert response to cursor
                     returnCursor = Utility.convertResponseToCursor(response.content);
-                    Log.i(LOG_TAG, "Query Result: " +Utility.dumpCursor(returnCursor));
+//                    Log.i(LOG_TAG, "Query Result: " +Utility.dumpCursor(returnCursor));
                     return returnCursor;
                 }
             default:
@@ -367,11 +367,11 @@ public class SimpleDynamoProvider extends ContentProvider {
 
     Message sendAndWaitForResponse(Message message, List<Coordinator.Node> nodesToTry) {
         for (Coordinator.Node node : nodesToTry) {
+            // messageMap is used to keep track of the sent messages
+            mCoordinator.messageMap.put(message.id, message);
             long startTime = System.currentTimeMillis();
             mCoordinator.mSender.sendMessage(Utility.convertMessageToJSON(message), node.port);
             Log.i(LOG_TAG, "Sent Message to node " + node.id + ": " + message);
-            // messageMap is used to keep track of the sent messages
-            mCoordinator.messageMap.put(message.id, message);
             int sendType = message.type;
             Message response;
             synchronized (message) {
