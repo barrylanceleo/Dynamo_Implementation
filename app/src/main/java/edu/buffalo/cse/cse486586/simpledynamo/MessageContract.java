@@ -1,5 +1,9 @@
 package edu.buffalo.cse.cse486586.simpledynamo;
 
+/**
+ * Constants for messages exchanged between nodes
+**/
+
 import java.util.concurrent.atomic.AtomicInteger;
 
 public class MessageContract {
@@ -9,7 +13,10 @@ public class MessageContract {
     public static final int SYNC_REQUEST_TIMEOUT = 500;
     public static final int SLEEP_TIME_WHILE_SYNC = 10;
     public static AtomicInteger messageCounter = new AtomicInteger(0);
-
+    
+    /**
+     * Constants for message types
+    **/
     public static class Type {
         // types for insert operation
         final static int MSG_INSERT_INITIATE_REQUEST = 100;
@@ -33,12 +40,10 @@ public class MessageContract {
         final static int MSG_SYNC_REQUEST = 400;
         final static int MSG_SYNC_RESPONSE = 401;
     }
-
-    public static class ResponseFlag {
-        final static int MSG_RESPONSE_FLAG_NOTHING = 0;
-        final static int MSG_RESPONSE_FLAG_OK = 1;
-    }
-
+ 
+    /**
+     * Constants for JSON message format
+    **/
     public static class Field {
         final static String MSG_FIELD_TYPE = "MSG_TYPE";
         final static String MSG_FIELD_ID = "MSG_ID";
