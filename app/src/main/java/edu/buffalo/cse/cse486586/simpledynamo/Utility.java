@@ -15,6 +15,8 @@ import java.io.IOException;
 import java.io.StringWriter;
 import java.util.List;
 
+/** Utility class to convert data between different formats **/
+
 public class Utility {
     private static final String LOG_TAG = Utility.class.getSimpleName();
 
@@ -77,10 +79,9 @@ public class Utility {
         }
     }
 
-    // does not include the deleted keys in the returned cursor
+    // converts query response message to a cursor, 
+    // ignores the keys with value = null as they are essentially deleted keys 
     public static Cursor convertResponseToCursor(String queryResponse){
-//        MatrixCursor cursor = new MatrixCursor(new String[]{DatabaseContract.DynamoEntry.COLUMN_KEY,
-//                DatabaseContract.DynamoEntry.COLUMN_VALUE, DatabaseContract.DynamoEntry.COLUMN_CONTEXT});
         MatrixCursor cursor = new MatrixCursor(new String[]{DatabaseContract.DynamoEntry.COLUMN_KEY,
                 DatabaseContract.DynamoEntry.COLUMN_VALUE});
         try {
@@ -89,9 +90,7 @@ public class Utility {
                 JSONObject jObject = messageJSON.getJSONObject(i);
                 String key = jObject.getString(MessageContract.Field.MSG_CONTENT_KEY);
                 String value = jObject.getString(MessageContract.Field.MSG_CONTENT_VALUE);
-//                String context = jObject.getString(MessageContract.Field.MSG_CONTENT_CONTEXT);
                 if(value != null) {
-//                    cursor.addRow(new String[]{key, value, context});
                     cursor.addRow(new String[]{key, value});
                 }
             }
