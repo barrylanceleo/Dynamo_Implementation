@@ -1,5 +1,10 @@
 package edu.buffalo.cse.cse486586.simpledynamo;
 
+/**
+ * Format for messages exchanged between nodes
+**/
+
+
 public class Message {
     private static final String LOG_TAG = Message.class.getSimpleName();
 
