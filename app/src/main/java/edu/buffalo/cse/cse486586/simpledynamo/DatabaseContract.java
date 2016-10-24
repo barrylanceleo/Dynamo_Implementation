@@ -3,6 +3,9 @@ package edu.buffalo.cse.cse486586.simpledynamo;
 import android.content.ContentResolver;
 import android.net.Uri;
 
+/** 
+  * Contract for the Dynamo database schema
+**/
 public class DatabaseContract {
     public static final String CONTENT_AUTHORITY = "edu.buffalo.cse.cse486586.simpledynamo.provider";
     public static final Uri BASE_CONTENT_URI = Uri.parse("content://" + CONTENT_AUTHORITY);
