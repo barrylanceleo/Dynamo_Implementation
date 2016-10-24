@@ -5,8 +5,9 @@ import android.database.sqlite.SQLiteDatabase;
 import android.database.sqlite.SQLiteOpenHelper;
 
 /**
- * Created by barry on 4/23/16.
- */
+  * Helper class for SQLite database
+**/
+
 public class DynamoDbHelper extends SQLiteOpenHelper {
 
     private static final String DATABASE_NAME = "dynamo.db";
