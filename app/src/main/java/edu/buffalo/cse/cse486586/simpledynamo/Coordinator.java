@@ -8,11 +8,9 @@ import android.database.Cursor;
 import android.telephony.TelephonyManager;
 import android.util.JsonWriter;
 import android.util.Log;
-
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
-
 import java.io.IOException;
 import java.io.StringWriter;
 import java.security.MessageDigest;
@@ -27,6 +25,11 @@ import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 
+
+/**     Coordinator class keeps track of all the messages received from other nodes and 
+    *   sends response or stored data in the persistent storage based on the message type
+**/
+
 public class Coordinator {
 
     private static final String LOG_TAG = Coordinator.class.getSimpleName();
@@ -38,7 +41,7 @@ public class Coordinator {
     final Map<Integer, Node> NODE_MAP;
     final List<Node> PREFERENCE_LIST;
 
-    // this is set only when re-sync is completed on startup
+    // to keep track of re-sync state after startup
     boolean isResynced;
 
     private Context mContext;
@@ -50,6 +53,7 @@ public class Coordinator {
 
     // used to send messages in a new thread
     Sender mSender;
+    
     // used to store the messages received by the listener
     BlockingQueue<String> receivedMessageQueue;
 
@@ -161,10 +165,7 @@ public class Coordinator {
         // send request to nodes which contain my data including others data i'm replicating
         List<Node> relatedNodes = getRelatedNodes(Integer.toString(MY_ID));
         List<Node> nodesIReplicate = getNodesIreplicate(Integer.toString(MY_ID));
-//        Log.i(LOG_TAG, "Related Nodes:");
-//        Utility.printNodeList(relatedNodes);
-//        Log.i(LOG_TAG, "Replicated Nodes:");
- //       Utility.printNodeList(nodesIReplicate);
+
         // build sync request message
         Message syncRequestMessage = new Message(MessageContract.Type.MSG_SYNC_REQUEST,
                 MessageContract.messageCounter.getAndIncrement(), MY_ID);
@@ -174,7 +175,6 @@ public class Coordinator {
         // create a blocking queue to keep track of the responses
         LinkedBlockingQueue<Message> responseQueue = new LinkedBlockingQueue<Message>();
         messageMap.put(syncRequestMessage.id, responseQueue);
-//        Log.i(LOG_TAG, "Added queue for MSG_SYNC_REQUEST :\n" +syncRequestMessage);
 
         long startTime = System.currentTimeMillis();
         for (Node node : relatedNodes) {
@@ -202,9 +202,9 @@ public class Coordinator {
                         "while waiting for response to: " + syncRequestMessage, e);
             }
         }
+
         // remove the message from the messageMap
         messageMap.remove(syncRequestMessage.id);
-//        Log.i(LOG_TAG, "Removed queue for MSG_SYNC_REQUEST :\n" +syncRequestMessage);
 
         // reconcile the responses and insert into my CP
         String messageToInsert = reconcileResponses(responses);
@@ -240,6 +240,7 @@ public class Coordinator {
         }
     }
 
+    // generate the SHA-1 hash for the input
     public static String genHash(String input)  {
         MessageDigest sha1 = null;
         try {
@@ -255,6 +256,7 @@ public class Coordinator {
         return formatter.toString();
     }
 
+    // get the co-ordinator for the given key
     Node findCoordinatingNode(String key) {
         String keyHash = genHash(key);
         for (int i =0; i < NODE_LIST.size(); i++) {
@@ -266,6 +268,7 @@ public class Coordinator {
         return NODE_LIST.get(0);
     }
 
+    // check if the current node is the co-ordinator for the given key
     boolean amITheCoordinator(String key) {
         Node coordinatingNode = findCoordinatingNode(key);
         return coordinatingNode.id == MY_ID? true : false;
@@ -289,7 +292,7 @@ public class Coordinator {
     }
 
     // return list of nodes which contain my data including others data i'm replicating
-    // doesn't include myself
+    // doesn't include current node
     List<Node> getRelatedNodes(String node_id) {
         List<Node> nodeList = new ArrayList<Node>();
         Node coordinatingNode = findCoordinatingNode(node_id);
@@ -311,7 +314,7 @@ public class Coordinator {
         return nodeList;
     }
 
-    // return list of nodes whose data I contain
+    // return list of nodes whose data the current node contains
     List<Node> getNodesIreplicate(String node_id) {
         List<Node> nodeList = new ArrayList<Node>();
         Node coordinatingNode = findCoordinatingNode(node_id);
@@ -331,6 +334,7 @@ public class Coordinator {
         return nodeList;
     }
 
+    // handles the message in the queue based on the message type
     void handleMessage(Message handledMessage) {
         Log.v(LOG_TAG, "Handling message: " +handledMessage);
         switch (handledMessage.type) {
@@ -389,7 +393,6 @@ public class Coordinator {
                 // create a blocking queue to keep track of the responses
                 LinkedBlockingQueue<Message> responseQueue = new LinkedBlockingQueue<Message>();
                 messageMap.put(insertMessage.id, responseQueue);
-//                Log.i(LOG_TAG, "Added queue for MSG_INSERT_REQUEST :\n" +insertMessage);
 
                 long startTime = System.currentTimeMillis();
                 for (Node node : preferenceList) {
@@ -418,7 +421,6 @@ public class Coordinator {
                 }
                 // remove the message from the messageMap
                 messageMap.remove(insertMessage.id);
-//                Log.i(LOG_TAG, "Removed queue for MSG_INSERT_REQUEST :\n" +insertMessage);
 
                 // check if we received enough responses and send a response to the source
                 if (responses.size() < DynamoContract.W) {
@@ -492,7 +494,6 @@ public class Coordinator {
                     // create a blocking queue to keep track of the responses
                     LinkedBlockingQueue<Message> responseQueue = new LinkedBlockingQueue<Message>();
                     messageMap.put(queryMessage.id, responseQueue);
-//                    Log.i(LOG_TAG, "Added queue for MSG_QUERY_REQUEST :\n" +queryMessage);
 
                     long startTime = System.currentTimeMillis();
                     for (Node node : NODE_LIST) {
@@ -521,8 +522,6 @@ public class Coordinator {
                     }
                     // remove the message from the messageMap
                     messageMap.remove(queryMessage.id);
-//                    Log.i(LOG_TAG, "Removed queue for MSG_QUERY_REQUEST :\n" +queryMessage);
-
 
                     // reconcile the responses and send a response to the source
                     handledMessage.type = MessageContract.Type.MSG_QUERY_INITIATE_RESPONSE;
@@ -543,7 +542,6 @@ public class Coordinator {
                     // create a blocking queue to keep track of the responses
                     LinkedBlockingQueue<Message> responseQueue = new LinkedBlockingQueue<Message>();
                     messageMap.put(queryMessage.id, responseQueue);
-//                    Log.i(LOG_TAG, "Added queue for MSG_QUERY_REQUEST :\n" +queryMessage);
 
                     long startTime = System.currentTimeMillis();
                     for (Node node : preferenceList) {
@@ -572,7 +570,6 @@ public class Coordinator {
                     }
                     // remove the message from the messageMap
                     messageMap.remove(queryMessage.id);
-//                    Log.i(LOG_TAG, "Removed queue for MSG_QUERY_REQUEST :\n" +queryMessage);
 
                     // check if we received enough responses and send a response to the source
                     if (responses.size() < DynamoContract.R) {
@@ -655,7 +652,6 @@ public class Coordinator {
                     // create a blocking queue to keep track of the responses
                     LinkedBlockingQueue<Message> responseQueue = new LinkedBlockingQueue<Message>();
                     messageMap.put(deleteMessage.id, responseQueue);
-//                    Log.i(LOG_TAG, "Added queue for MSG_DELETE_REQUEST :\n" +deleteMessage);
 
                     long startTime = System.currentTimeMillis();
                     for (Node node : NODE_LIST) {
@@ -684,7 +680,6 @@ public class Coordinator {
                     }
                     // remove the message from the messageMap
                     messageMap.remove(deleteMessage.id);
-//                    Log.i(LOG_TAG, "Removed queue for MSG_DELETE_REQUEST :\n" +deleteMessage);
 
                     // count the total number of entries deleted and send a response to the source
                     int deletedCount = 0;
@@ -709,7 +704,6 @@ public class Coordinator {
                     // create a blocking queue to keep track of the responses
                     LinkedBlockingQueue<Message> responseQueue = new LinkedBlockingQueue<Message>();
                     messageMap.put(deleteMessage.id, responseQueue);
-//                    Log.i(LOG_TAG, "Added queue for MSG_DELETE_REQUEST :\n" +deleteMessage);
 
                     long startTime = System.currentTimeMillis();
                     for (Node node : preferenceList) {
@@ -738,7 +732,6 @@ public class Coordinator {
                     }
                     // remove the message from the messageMap
                     messageMap.remove(deleteMessage.id);
-//                    Log.i(LOG_TAG, "Removed queue for MSG_DELETE_REQUEST :\n" +deleteMessage);
 
                     // check if we received enough responses and send a response to the source
                     if (responses.size() < DynamoContract.W) {
@@ -817,6 +810,9 @@ public class Coordinator {
             Log.e(LOG_TAG, "Unknown message type.");
         }
     }
+    
+    
+    // re-format the the text to  key, Value, Context information
     String [] getKeyValueContext(String text) {
         String [] keyValueContext = new String[3];
         try {
@@ -831,6 +827,7 @@ public class Coordinator {
         return keyValueContext;
     }
 
+    // reconcile the received response, i.e., remove values with older context
     String reconcileResponses(List<Message> responses) {
         Log.i(LOG_TAG, "Reconciling " +responses.size() +" responses.");
         HashMap<String, JSONObject> keyMap = new HashMap<String, JSONObject>();
