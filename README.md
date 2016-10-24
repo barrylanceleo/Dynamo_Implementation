@@ -1,4 +1,4 @@
-# Dynamo Implementation
+# Amazon Dynamo Implementation
 
 This is a sample implementation of Amazon Dynamo using 5 android emulators as nodes.
 
