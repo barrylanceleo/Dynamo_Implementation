@@ -6,6 +6,9 @@ import android.text.method.ScrollingMovementMethod;
 import android.view.Menu;
 import android.widget.TextView;
 
+/** Home activity for the application, does not contain any UI as the application is tested using ADB
+**/
+
 public class SimpleDynamoActivity extends Activity {
 
 	@Override
