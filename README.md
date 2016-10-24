@@ -1,8 +1,8 @@
-# Dynamo_Implementation
+# Dynamo Implementation
 
-This is an implementation of Amazon Dynamo using 5 android emulators as nodes.
+This is a sample implementation of Amazon Dynamo using 5 android emulators as nodes.
 
-Design:
+# Design:
 
 	Membership
 		Every node knows every other node. This means that each node knows all other nodes in the system 
