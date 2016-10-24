@@ -7,13 +7,17 @@ import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 
+/** 
+    * Used to send messages to other nodes  
+**/
+
 public class Sender {
 
     static final String TAG = SenderRunnable.class.getSimpleName();
-
+   
+    // sends the message to the given port in a new thread    
     public void sendMessage(String message, int port)
     {
-        // create a sender thread to send the message
         new Thread(new SenderRunnable(message, port)).start();
     }
 
