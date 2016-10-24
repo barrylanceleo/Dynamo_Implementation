@@ -10,6 +10,10 @@ import android.util.Log;
 
 import java.util.List;
 
+/** SimpleDynamoProvider extends the android ContentProvider and 
+  * provides persistent storage for the data to be stored in the node.
+  * The ContentProvider receives the insert, delete and query requests.
+**/
 
 public class SimpleDynamoProvider extends ContentProvider {
 
@@ -40,6 +44,7 @@ public class SimpleDynamoProvider extends ContentProvider {
         return matcher;
     }
 
+    // called on startup
     @Override
     public boolean onCreate() {
         Log.i(LOG_TAG, "Creating the Content Provider.");
@@ -58,7 +63,7 @@ public class SimpleDynamoProvider extends ContentProvider {
                 }
             });
             backgroundThread.start();
-            // re-sync
+            // re-sync on startup
             mCoordinator.resync(this);
         }
         Log.i(LOG_TAG, "Node started and re-synced.");
@@ -246,7 +251,6 @@ public class SimpleDynamoProvider extends ContentProvider {
                         null,          // don't filter by row groups
                         sortOrder        // The sort order
                 );
-//                Log.i(LOG_TAG, "Query Result: " +Utility.dumpCursor(returnCursor));
                 return returnCursor;
             case DYNAMO:
                 String key = selection;
@@ -261,7 +265,6 @@ public class SimpleDynamoProvider extends ContentProvider {
                     // convert response to cursor
                     if(response != null) {
                         returnCursor = Utility.convertResponseToCursor(response.content);
-//                        Log.i(LOG_TAG, "Query Result: " +Utility.dumpCursor(returnCursor));
                         return returnCursor;
                     }
                     return null;
@@ -285,7 +288,6 @@ public class SimpleDynamoProvider extends ContentProvider {
                             initiateMessage, mCoordinator.getPreferenceList(key));
                     // convert response to cursor
                     returnCursor = Utility.convertResponseToCursor(response.content);
-//                    Log.i(LOG_TAG, "Query Result: " +Utility.dumpCursor(returnCursor));
                     return returnCursor;
                 }
             default:
@@ -361,10 +363,11 @@ public class SimpleDynamoProvider extends ContentProvider {
     @Override
     public int update(Uri uri, ContentValues values, String selection,
                       String[] selectionArgs) {
-        // TODO Auto-generated method stub
+        // node used, does nothing
         return 0;
     }
 
+    // sends the message to the given list of nodes and waits for response from all of them
     Message sendAndWaitForResponse(Message message, List<Coordinator.Node> nodesToTry) {
         for (Coordinator.Node node : nodesToTry) {
             // messageMap is used to keep track of the sent messages
@@ -376,7 +379,6 @@ public class SimpleDynamoProvider extends ContentProvider {
             Message response;
             synchronized (message) {
                 try {
-                    //message.wait(MessageContract.LONG_TIMEOUT);
                     message.wait(MessageContract.INITIATE_REQUEST_TIMEOUT);
                     response = (Message) mCoordinator.messageMap.remove(message.id);
                     if (sendType != response.type) {
