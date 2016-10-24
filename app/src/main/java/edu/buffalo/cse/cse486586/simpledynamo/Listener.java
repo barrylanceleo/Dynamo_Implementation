@@ -10,7 +10,8 @@ import java.net.SocketTimeoutException;
 import java.util.concurrent.BlockingQueue;
 
 /**
- * Created by barry on 3/18/16.
+ * Listens on the LISTENING_PORT and adds the received messages to a message queue.
+ * The messages in the queue are then processed by the Co-ordinator
  */
 public class Listener {
 
